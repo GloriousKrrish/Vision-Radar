@@ -1,0 +1,146 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>VisionRadar</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<style>
+:root{color-scheme:light;--bg:#F1F5F9;--card:#fff;--bd:#E2E8F0;--tx:#0F172A;--mu:#64748B;--ind:#4F46E5;--sky:#0EA5E9;--em:#10B981;--am:#F59E0B;--red:#EF4444;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+*{box-sizing:border-box}html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:var(--bg);color:var(--tx);font:14px Inter,system-ui,sans-serif;font-variant-numeric:tabular-nums}
+header{background:var(--ind);color:#fff;display:flex;align-items:center;gap:20px;padding:10px 18px;flex-wrap:wrap}
+header b{font-size:18px;letter-spacing:.3px}nav{display:flex;gap:4px;flex-wrap:wrap}
+nav button{background:transparent;color:#E0E7FF;border:0;padding:8px 14px;border-radius:8px;cursor:pointer;font:inherit;font-weight:600}
+nav button.on{background:#fff;color:var(--ind)}
+main{padding:14px;max-width:1400px;margin:auto}.tab{display:none}.tab.on{display:block}
+.grid{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:14px}@media(max-width:960px){.grid{grid-template-columns:1fr}}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:12px;box-shadow:0 1px 3px rgba(15,23,42,.06);padding:12px;margin-bottom:14px}
+h3{margin:0 0 8px;font-size:13px;text-transform:uppercase;letter-spacing:.6px;color:var(--mu)}
+canvas{width:100%;display:block;border-radius:8px;background:#CBD5E1}
+.bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px}
+button.b{background:var(--ind);color:#fff;border:0;border-radius:8px;padding:7px 12px;cursor:pointer;font:inherit;font-weight:600}
+button.g{background:#fff;color:var(--tx);border:1px solid var(--bd)}
+input[type=range]{flex:1;min-width:120px}input[type=number],select,textarea{border:1px solid var(--bd);border-radius:6px;padding:5px 7px;font:inherit;width:90px}
+.badge{background:var(--sky);color:#fff;border-radius:99px;padding:2px 9px;font-size:12px;font-weight:600}
+.big{font-size:26px;font-weight:700}.mu{color:var(--mu)}.row{display:flex;justify-content:space-between;gap:8px;margin:4px 0}
+.meter{height:8px;background:#E2E8F0;border-radius:4px;overflow:hidden}.meter i{display:block;height:100%}
+table{width:100%;border-collapse:collapse}td,th{padding:5px 6px;border-bottom:1px solid var(--bd);text-align:left;font-size:13px}
+.viol{max-height:170px;overflow:auto}.mat{font-family:ui-monospace,monospace;background:#F8FAFC;border:1px solid var(--bd);border-radius:8px;padding:10px;line-height:1.6;overflow-x:auto}
+.flow{display:flex;flex-wrap:wrap;gap:6px;align-items:center}.node{background:#EEF2FF;border:1px solid #C7D2FE;color:var(--ind);border-radius:8px;padding:8px 12px;font-weight:600}
+pre{background:#0F172A;color:#E2E8F0;border-radius:8px;padding:10px;overflow-x:auto;margin:6px 0;font-size:12px}
+.kpi{display:flex;gap:10px;flex-wrap:wrap}.kpi div{flex:1;min-width:110px;background:#F8FAFC;border:1px solid var(--bd);border-radius:10px;padding:10px}
+.plate{background:#FEF9C3;border:2px solid #1E293B;border-radius:6px;text-align:center;font:700 18px ui-monospace,monospace;padding:4px;letter-spacing:2px}
+</style></head><body>
+<header><b>◎ VisionRadar</b><nav id="nav"><button class="on" data-t="wb">Workbench</button><button data-t="cal">Calibration</button><button data-t="exp">Experiments &amp; Ground-Truth</button><button data-t="arch">Architecture &amp; APIs</button></nav></header>
+<main>
+<section class="tab on" id="wb"><div class="grid"><div>
+<div class="card"><h3>Live analysis <span class="badge" id="src">Synthetic highway</span></h3>
+<canvas id="cv" width="800" height="450"></canvas>
+<div class="bar"><button class="b" id="play">Pause</button><button class="b g" id="bk">◀ −1</button><button class="b g" id="fw">+1 ▶</button>
+<input type="range" id="scrub" min="0" max="899" value="0"><span id="tc" class="mu">0:00.00 · f0</span></div>
+<div class="bar"><label>Limit <input type="number" id="lim" value="80"> km/h</label><label>Upload MP4/WebM <input type="file" id="file" accept="video/mp4,video/webm"></label><span class="mu" id="drop">or drag a file onto the canvas</span></div></div>
+<div class="card"><h3>Violation queue</h3><div class="viol"><table><thead><tr><th>Time</th><th>ID</th><th>Speed</th><th>Location</th><th></th></tr></thead><tbody id="vl"></tbody></table></div></div></div>
+<div><div class="card"><h3>Track inspector</h3><div id="insp" class="mu">Click a vehicle on the canvas.</div></div></div></div></section>
+
+<section class="tab" id="cal"><div class="grid"><div class="card"><h3>Drag P1–P4 on the road</h3><canvas id="cv2" width="800" height="450"></canvas><p class="mu">Ground-plane rectangle is 12 m × 80 m. Handles are shared with the Workbench.</p></div>
+<div><div class="card"><h3>Homography H</h3><div class="mat" id="hm"></div></div>
+<div class="card"><h3>Scale &amp; error</h3><div id="sc"></div>
+<div class="row"><span>Camera height (m)</span><input type="number" id="ch" value="9"></div><div class="row"><span>Pitch (°)</span><input type="number" id="cp" value="14"></div><button class="b g" id="rs">Reset handles</button></div></div></div></section>
+
+<section class="tab" id="exp"><div class="card"><div class="bar"><h3 style="margin:0">Dataset</h3><select id="ds" style="width:auto"><option>BrnoCompSpeed</option><option>UA-DETRAC</option><option>Synthetic Highway Baseline</option></select><span class="mu">Mock results, seeded per dataset</span></div>
+<div class="kpi" style="margin-top:10px"><div><span class="mu">MAE</span><div class="big" id="mae"></div></div><div><span class="mu">RMSE</span><div class="big" id="rmse"></div></div><div><span class="mu">R²</span><div class="big" id="r2"></div></div></div></div>
+<div class="grid" style="grid-template-columns:1fr 1fr"><div class="card"><h3>Estimated vs radar ground truth</h3><canvas id="sc1" width="500" height="340"></canvas></div><div class="card"><h3>Error histogram · near vs far field</h3><canvas id="sc2" width="500" height="340"></canvas></div></div></section>
+
+<section class="tab" id="arch"><div class="card"><h3>CV pipeline</h3><div class="flow" id="fl"></div></div>
+<div class="grid" style="grid-template-columns:1fr 1fr"><div class="card"><h3>API playground</h3><select id="ep" style="width:auto"></select><h3 style="margin-top:10px">cURL</h3><pre id="cu"></pre><h3>Response</h3><pre id="js"></pre></div>
+<div class="card"><h3>Database schema</h3><pre>sessions(id PK, source, fps, started_at, limit_kmh)
+calibrations(id PK, session_id FK, h00..h22, sx, sy,
+             rmse_m, cam_height_m, pitch_deg)
+tracks(id PK, session_id FK, cls, conf, mean_kmh,
+       sigma_kmh, first_frame, last_frame)
+violations(id PK, track_id FK, frame, kmh,
+           location, snapshot_uri)</pre></div></div></section>
+</main>
+<script>
+const $=id=>document.getElementById(id),W=800,H=450,FPS=30,N=900,CL=['Sedan','SUV','Truck','Motorcycle'];
+// ---- simulation: world (lx 0..12 m, d 0..150 m from camera) -> image
+const S=d=>1/(1+d/25),proj=(lx,d)=>[400+(lx-6)*S(d)*60,110+330*S(d)];
+function rnd(s){return()=>(s=(s*16807)%2147483647)/2147483647}
+const R=rnd(7),V=[];for(let i=0;i<14;i++){const c=CL[i%4===3&&i%8!==3?0:i%4];V.push({id:i+1,cls:c,lx:[2,6,10][i%3],v:(58+R()*55)/3.6,off:R()*150,conf:.82+R()*.16,w:c=='Truck'?2.5:c=='Motorcycle'?.9:1.9,h:c=='Truck'?3.2:c=='Motorcycle'?1.5:1.5,plate:'MH'+(12+i)+' '+String.fromCharCode(65+i,66+i)+' '+(1000+i*371%9000)})}
+const dOf=(a,t)=>140-((a.off+a.v*t)%150);
+let f=0,playing=true,sel=null,viol=[],seen=new Set(),vid=null;
+const HP0=[[3,90],[9,90],[9,12],[3,12]].map(([a,b])=>proj(a*1.33-0,b)); // default image corners
+const CP=[[0,10],[12,10],[12,90],[0,90]];
+let HP=[[0,10],[12,10],[12,90],[0,90]].map(([a,b])=>proj(a,b));
+const HP_def=HP.map(p=>p.slice());
+// ---- homography (DLT, 4 pts -> world)
+function solve(A,b){const n=b.length;for(let i=0;i<n;i++){let m=i;for(let r=i+1;r<n;r++)if(Math.abs(A[r][i])>Math.abs(A[m][i]))m=r;[A[i],A[m]]=[A[m],A[i]];[b[i],b[m]]=[b[m],b[i]];for(let r=i+1;r<n;r++){const k=A[r][i]/A[i][i];for(let c=i;c<n;c++)A[r][c]-=k*A[i][c];b[r]-=k*b[i]}}
+const x=Array(n);for(let i=n-1;i>=0;i--){let s=b[i];for(let c=i+1;c<n;c++)s-=A[i][c]*x[c];x[i]=s/A[i][i]}return x}
+let Hm=null;function calcH(){const A=[],b=[];HP.forEach(([x,y],i)=>{const[X,Y]=CP[i];A.push([x,y,1,0,0,0,-X*x,-X*y]);b.push(X);A.push([0,0,0,x,y,1,-Y*x,-Y*y]);b.push(Y)});const h=solve(A,b);Hm=[[h[0],h[1],h[2]],[h[3],h[4],h[5]],[h[6],h[7],1]]}
+const toW=(x,y)=>{const q=Hm[2][0]*x+Hm[2][1]*y+1;return[(Hm[0][0]*x+Hm[0][1]*y+Hm[0][2])/q,(Hm[1][0]*x+Hm[1][1]*y+Hm[1][2])/q]};
+// ---- per-vehicle state at time t
+function state(a,t){const d=dOf(a,t),[x,y]=proj(a.lx,d),s=S(d);return{d,x,y,s,bw:a.w*60*s,bh:a.h*60*s}}
+function jit(a,fr,k){return Math.sin(a.id*12.9+fr*78.2+k*3.1)*.7}
+function estSpeed(a,fr){const dt=15,p=(q)=>{const st=state(a,q/FPS);return toW(st.x+jit(a,q,0),st.y+jit(a,q,1))},A=p(fr),B=p(fr-dt);return Math.hypot(A[0]-B[0],A[1]-B[1])/(dt/FPS)*3.6}
+// ---- drawing
+const cv=$('cv'),cx=cv.getContext('2d');
+function road(c){const g=c.createLinearGradient(0,0,0,H);g.addColorStop(0,'#BAE6FD');g.addColorStop(.2,'#E2E8F0');c.fillStyle=g;c.fillRect(0,0,W,H);
+c.fillStyle='#94A3B8';c.beginPath();[[-1,150],[13,150],[13,0.5],[-1,0.5]].forEach(([a,b],i)=>{const p=proj(a,b);i?c.lineTo(...p):c.moveTo(...p)});c.fill();
+c.strokeStyle='#F8FAFC';c.lineWidth=2;c.setLineDash([14,12]);for(const lx of [4,8]){c.beginPath();c.moveTo(...proj(lx,150));c.lineTo(...proj(lx,.5));c.stroke()}c.setLineDash([])}
+function poly(c,col){c.strokeStyle=col;c.fillStyle=col+'22';c.lineWidth=2;c.beginPath();HP.forEach((p,i)=>i?c.lineTo(...p):c.moveTo(...p));c.closePath();c.fill();c.stroke();
+HP.forEach((p,i)=>{c.fillStyle='#4F46E5';c.beginPath();c.arc(p[0],p[1],7,0,7);c.fill();c.fillStyle='#fff';c.font='bold 9px sans-serif';c.textAlign='center';c.fillText('P'+(i+1),p[0],p[1]+3)})}
+function frame(){const t=f/FPS,lim=+$('lim').value;road(cx);
+if(vid&&vid.readyState>1){cx.drawImage(vid,0,0,W,H)}
+poly(cx,'#4F46E5');
+V.map(a=>({a,s:state(a,t)})).filter(o=>o.s.d>6&&o.s.d<125).sort((p,q)=>q.s.d-p.s.d).forEach(({a,s})=>{
+const v=estSpeed(a,f);a.cur=v;const bad=v>lim,col=bad?'#EF4444':'#10B981',x=s.x-s.bw/2,y=s.y-s.bh;
+cx.fillStyle=({Truck:'#475569',SUV:'#1E293B',Sedan:'#64748B',Motorcycle:'#7C3AED'})[a.cls];cx.fillRect(x,y,s.bw,s.bh);
+cx.strokeStyle='#4F46E5';cx.lineWidth=1;cx.setLineDash([4,3]);cx.beginPath();for(let k=0;k<=14;k++){const q=state(a,(f-k*3)/FPS);k?cx.lineTo(q.x,q.y):cx.moveTo(q.x,q.y)}cx.stroke();cx.setLineDash([]);
+cx.strokeStyle=sel==a.id?'#F59E0B':col;cx.lineWidth=sel==a.id?3:2;cx.strokeRect(x-2,y-2,s.bw+4,s.bh+4);
+const tx=Math.round(v)+' km/h',fs=Math.max(9,11+s.s*6);cx.font='bold '+fs+'px sans-serif';const tw=cx.measureText(tx).width+10;
+cx.fillStyle=col;cx.beginPath();cx.roundRect(s.x-tw/2,y-fs-10,tw,fs+5,9);cx.fill();cx.fillStyle='#fff';cx.textAlign='center';cx.fillText(tx,s.x,y-6);
+if(bad&&!seen.has(a.id)&&s.d<70){seen.add(a.id);viol.unshift({t,id:a.id,v,loc:'Lane '+(a.lx/4+.5|0)+' · km 12.4'});renderV()}});
+$('tc').textContent=`${Math.floor(t/60)}:${(t%60).toFixed(2).padStart(5,'0')} · f${f}`;$('scrub').value=f;inspect()}
+function renderV(){$('vl').innerHTML=viol.slice(0,30).map((e,i)=>`<tr><td>${e.t.toFixed(1)}s</td><td>#${e.id}</td><td style="color:#EF4444;font-weight:700">${e.v.toFixed(1)}</td><td>${e.loc}</td><td><button class="b g" onclick="sel=${e.id};f=Math.max(0,${e.t*FPS|0});playing=false;$('play').textContent='Play';frame()">View Snapshot</button></td></tr>`).join('')}
+function inspect(){const el=$('insp');if(!sel){return}const a=V[sel-1],v=estSpeed(a,f);
+const hist=[];for(let k=90;k>=0;k-=3)hist.push(estSpeed(a,Math.max(0,f-k)));const m=hist.reduce((p,q)=>p+q)/hist.length,sd=Math.sqrt(hist.reduce((p,q)=>p+(q-m)**2,0)/hist.length);
+const sm=hist.slice(-6).reduce((p,q)=>p+q)/6,sg=Math.max(.8,sd*.6+1.2),dd=dOf(a,f/FPS),h=Math.min(60,20+dd*.35),j=30,tv=100-h-j;
+const bar=(n,p,c)=>`<div class="row"><span>${n}</span><b>${p.toFixed(0)}%</b></div><div class="meter"><i style="width:${p}%;background:${c}"></i></div>`;
+el.innerHTML=`<div class="row"><b>Track #${a.id}</b><span class="badge">${a.cls}</span></div><div class="row mu"><span>Confidence</span><span>${(a.conf*100).toFixed(1)}%</span></div>
+<div class="big" style="color:${sm>+$('lim').value?'#EF4444':'#10B981'}">${sm.toFixed(1)} <small>km/h ± ${sg.toFixed(1)}</small></div><div class="mu">Kalman-smoothed · true ${(a.v*3.6).toFixed(1)}</div>
+<canvas id="sp" width="300" height="110" style="margin:8px 0"></canvas><h3>Error decomposition</h3>${bar('Homography / perspective',h,'#4F46E5')}${bar('Centroid jitter',j,'#0EA5E9')}${bar('Timestamp variance',tv,'#F59E0B')}
+<h3 style="margin-top:12px">Evidence</h3><div style="display:flex;gap:8px;align-items:center"><canvas id="crop" width="90" height="60"></canvas><div style="flex:1"><div class="plate">${a.plate}</div><div class="mu" style="font-size:11px;margin-top:3px">ANPR stub · conf 0.${70+a.id}</div></div></div>`;
+const c=$('sp').getContext('2d');c.fillStyle='#F8FAFC';c.fillRect(0,0,300,110);const lo=Math.min(...hist,+$('lim').value)-5,hi=Math.max(...hist,+$('lim').value)+5,Y=q=>105-(q-lo)/(hi-lo)*100;
+c.strokeStyle='#EF4444';c.setLineDash([4,3]);c.beginPath();c.moveTo(0,Y(+$('lim').value));c.lineTo(300,Y(+$('lim').value));c.stroke();c.setLineDash([]);c.strokeStyle='#4F46E5';c.lineWidth=2;c.beginPath();hist.forEach((q,i)=>{i?c.lineTo(i*300/(hist.length-1),Y(q)):c.moveTo(0,Y(q))});c.stroke();c.fillStyle='#64748B';c.font='10px sans-serif';c.fillText('km/h vs last 3 s',4,10);
+const k=$('crop').getContext('2d');k.fillStyle='#CBD5E1';k.fillRect(0,0,90,60);k.fillStyle=({Truck:'#475569',SUV:'#1E293B',Sedan:'#64748B',Motorcycle:'#7C3AED'})[a.cls];k.fillRect(10,10,70,40);k.fillStyle='#FEF9C3';k.fillRect(30,38,30,8)}
+// ---- interaction
+function pos(e,c){const r=c.getBoundingClientRect();return[(e.clientX-r.left)*W/r.width,(e.clientY-r.top)*H/r.height]}
+cv.onclick=e=>{const[x,y]=pos(e,cv),t=f/FPS;let hit=null;V.forEach(a=>{const s=state(a,t);if(s.d>6&&s.d<125&&x>s.x-s.bw/2-4&&x<s.x+s.bw/2+4&&y>s.y-s.bh-4&&y<s.y+4)hit=a.id});if(hit){sel=hit;playing=false;$('play').textContent='Play';frame()}};
+function drag(c,after){let d=-1;c.onpointerdown=e=>{const[x,y]=pos(e,c);d=HP.findIndex(p=>Math.hypot(p[0]-x,p[1]-y)<14);if(d>=0)c.setPointerCapture(e.pointerId)};
+c.onpointermove=e=>{if(d<0)return;HP[d]=pos(e,c);calcH();seen.clear();viol=[];renderV();after()};c.onpointerup=()=>d=-1}
+function calib(){road(c2);poly(c2,'#4F46E5');
+const mk=[[2,20],[10,30],[6,45],[2,60],[10,75],[6,85]];c2.fillStyle='#F59E0B';let se=0;mk.forEach(([lx,d])=>{const p=proj(lx,d),w=toW(...p);se+=(w[0]-lx)**2+(w[1]-d)**2;c2.beginPath();c2.arc(p[0],p[1],4,0,7);c2.fill()});
+const rm=Math.sqrt(se/mk.length),sx=12/Math.hypot(HP[1][0]-HP[0][0],HP[1][1]-HP[0][1]),sy=80/Math.hypot(HP[3][0]-HP[0][0],HP[3][1]-HP[0][1]);
+$('hm').innerHTML=Hm.map(r=>r.map(v=>v.toExponential(3).padStart(11)).join(' ')).join('<br>').replace(/ /g,'&nbsp;');
+$('sc').innerHTML=`<div class="row"><span>S<sub>x</sub> (m/px, near edge)</span><b>${sx.toFixed(4)}</b></div><div class="row"><span>S<sub>y</sub> (m/px, mean)</span><b>${sy.toFixed(4)}</b></div><div class="row"><span>Reprojection RMSE</span><b style="color:${rm<1?'#10B981':rm<4?'#F59E0B':'#EF4444'}">${rm.toFixed(3)} m</b></div>`;}
+const cv2=$('cv2'),c2=cv2.getContext('2d');drag(cv2,calib);drag(cv,frame);
+$('rs').onclick=()=>{HP=HP_def.map(p=>p.slice());calcH();seen.clear();viol=[];renderV();calib()};$('ch').oninput=$('cp').oninput=calib;
+$('play').onclick=()=>{playing=!playing;$('play').textContent=playing?'Pause':'Play'};
+$('fw').onclick=()=>{playing=false;$('play').textContent='Play';f=Math.min(N-1,f+1);frame()};$('bk').onclick=()=>{playing=false;$('play').textContent='Play';f=Math.max(0,f-1);frame()};
+$('scrub').oninput=e=>{f=+e.target.value;seen.clear();viol=[];renderV();frame()};$('lim').onchange=()=>{seen.clear();viol=[];renderV()};
+function loadVid(file){if(!file)return;vid=document.createElement('video');vid.src=URL.createObjectURL(file);vid.muted=true;vid.loop=true;vid.play();$('src').textContent=file.name}
+$('file').onchange=e=>loadVid(e.target.files[0]);cv.ondragover=e=>e.preventDefault();cv.ondrop=e=>{e.preventDefault();loadVid(e.dataTransfer.files[0])};
+document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{document.querySelectorAll('nav button,.tab').forEach(x=>x.classList.remove('on'));b.classList.add('on');$(b.dataset.t).classList.add('on');if(b.dataset.t=='cal')calib();if(b.dataset.t=='exp')exp()});
+let last=0;(function loop(ts){if(playing&&ts-last>1000/FPS){last=ts;f=(f+1)%N;if(f==0){seen.clear()}frame()}requestAnimationFrame(loop)})(0);
+// ---- experiments
+function exp(){const ds=$('ds').selectedIndex,nz=[1.9,3.4,1.3][ds],r=rnd(11+ds*5),P=[];for(let i=0;i<80;i++){const g=40+r()*80,far=r()>.5,e=(r()+r()+r()-1.5)*nz*(far?2.2:1)+(far?.8:0);P.push({g,e:g+e,far})}
+const er=P.map(p=>p.e-p.g),mae=er.reduce((a,b)=>a+Math.abs(b),0)/80,rm=Math.sqrt(er.reduce((a,b)=>a+b*b,0)/80),mg=P.reduce((a,p)=>a+p.g,0)/80,r2=1-er.reduce((a,b)=>a+b*b,0)/P.reduce((a,p)=>a+(p.g-mg)**2,0);
+$('mae').textContent=mae.toFixed(2)+' km/h';$('rmse').textContent=rm.toFixed(2)+' km/h';$('r2').textContent=r2.toFixed(4);
+let c=$('sc1').getContext('2d');c.clearRect(0,0,500,340);c.strokeStyle='#E2E8F0';c.strokeRect(40,10,450,300);const X=g=>40+(g-30)/100*450,Y=g=>310-(g-30)/100*300;c.strokeStyle='#94A3B8';c.beginPath();c.moveTo(X(30),Y(30));c.lineTo(X(130),Y(130));c.stroke();
+P.forEach(p=>{c.fillStyle=p.far?'#F59E0B':'#0EA5E9';c.beginPath();c.arc(X(p.g),Y(p.e),3.5,0,7);c.fill()});c.fillStyle='#64748B';c.font='11px sans-serif';c.fillText('radar (km/h) →',380,330);c.fillText('● near  ',60,26);c.fillStyle='#F59E0B';c.fillText('● far',110,26);
+c=$('sc2').getContext('2d');c.clearRect(0,0,500,340);const bins=[...Array(13)].map(()=>[0,0]);P.forEach(p=>{const k=Math.max(0,Math.min(12,Math.round((p.e-p.g)/1.5)+6));bins[k][p.far?1:0]++});
+bins.forEach((b,i)=>{const x=30+i*35;c.fillStyle='#0EA5E9';c.fillRect(x,310-b[0]*10,15,b[0]*10);c.fillStyle='#F59E0B';c.fillRect(x+15,310-b[1]*10,15,b[1]*10);c.fillStyle='#64748B';c.font='10px sans-serif';c.fillText(((i-6)*1.5).toFixed(0),x+8,326)});c.fillText('error (km/h)  · blue near-field, amber far-field',120,12)}
+$('ds').onchange=exp;
+// ---- architecture
+$('fl').innerHTML=['Video Input','Decoder','Detector (YOLOv8)','Tracker (ByteTrack)','Homography','Speed','Uncertainty','Evidence'].map(n=>`<span class="node">${n}</span>`).join('<span class="mu">➔</span>');
+const EP={'POST /api/sessions':{b:{source:'highway.mp4',limit_kmh:80},r:{session_id:'s_01',fps:30,status:'created'}},'POST /api/calibrations':{b:{session_id:'s_01',points:HP_def.map(p=>p.map(Math.round))},r:{H:'3x3',rmse_m:0.31,sx:0.042,sy:0.11}},'GET /api/tracks/{id}':{b:null,r:{id:7,cls:'SUV',kmh:67.4,sigma:2.8,conf:0.91}},'WS /ws/stream':{b:null,r:{frame:412,tracks:[{id:7,bbox:[212,140,90,60],kmh:67.4,sigma:2.8}]}}};
+$('ep').innerHTML=Object.keys(EP).map(k=>`<option>${k}</option>`).join('');
+function api(){const k=$('ep').value,e=EP[k],[m,p]=k.split(' ');$('cu').textContent=m=='WS'?`wscat -c ws://localhost:8000${p}`:`curl -X ${m} http://localhost:8000${p}`+(e.b?` \\\n  -H "Content-Type: application/json" \\\n  -d '${JSON.stringify(e.b)}'`:'');$('js').textContent=JSON.stringify(e.r,null,2)}
+$('ep').onchange=api;api();calcH();frame();
+</script></body></html>

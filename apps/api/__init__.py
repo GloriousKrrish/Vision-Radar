@@ -1,0 +1,3 @@
+"""
+VisionRadar FastAPI Application
+"""

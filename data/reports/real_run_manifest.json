@@ -1,0 +1,22 @@
+{
+  "processing_run_id": "run_1790300488",
+  "video_id": 1,
+  "video_filename": "synthetic_highway.mp4",
+  "resolution": [
+    800,
+    450
+  ],
+  "fps": 30.0,
+  "duration_sec": 10.0,
+  "frames_processed": 300,
+  "detector": "YOLOX-Nano-ONNX",
+  "detector_version": "1.0.0",
+  "model_hash": "c789161ed43c8269fcd4e67c67eeeb4e80c622da2eb296a20bc6007bd18a0b7d",
+  "tracker": "ByteTrack",
+  "calibration_id": 1,
+  "lane_configuration_id": "lanes_standard_v1",
+  "policy_version": "v1.0.0",
+  "processing_device": "CPU",
+  "runtime_seconds": 27.94,
+  "processing_fps": 10.7
+}

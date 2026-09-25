@@ -1,0 +1,31 @@
+# Node / Web Build
+node_modules/
+dist/
+build/
+.vite/
+*.log
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Database & Runtime Data
+*.db
+*.sqlite
+*.sqlite3
+data/videos/*.mp4
+data/evidence/*
+data/reports/*.pdf
+
+# IDE & OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

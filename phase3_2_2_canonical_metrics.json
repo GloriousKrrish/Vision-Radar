@@ -1,0 +1,148 @@
+{
+  "video_hash": "a4c3ee6aeca7f5085cc49408d572e3e3df7cab65ead15701996724827ef99c10",
+  "model_hash": "c789161ed43c8269fcd4e67c67eeeb4e80c622da2eb296a20bc6007bd18a0b7d",
+  "config_hash": "ac96abea6c50d925bc2e6da2cd5c5bebbaed0b64f18438d6dd6b0b8d0255cd7c",
+  "calibration_hash": "3f8afbc78261afa394a2a73473675d173aa4533ec118339732d45ad189ec83a0",
+  "detections": 1685,
+  "raw_detections": 2814000,
+  "tracks": 31,
+  "observed_internal_id_switches": 0,
+  "fragmentations": 63,
+  "speed": {
+    "mean_kmh": 66.8,
+    "median_kmh": 47.9,
+    "p85_kmh": 140.0
+  },
+  "occupancy": {
+    "mean_vehicles": 1.33,
+    "max_vehicles": 4
+  },
+  "density": {
+    "mean_veh_km": 8.8,
+    "max_veh_km": 26.7
+  },
+  "crossings": 10,
+  "crossing_events": [
+    {
+      "track_id": 1,
+      "frame": 56,
+      "timestamp": 1.87,
+      "gate_id": "gate_1",
+      "direction": "SOUTHWARD",
+      "position": [
+        1400.5,
+        651.0
+      ]
+    },
+    {
+      "track_id": 2,
+      "frame": 56,
+      "timestamp": 1.87,
+      "gate_id": "gate_1",
+      "direction": "SOUTHWARD",
+      "position": [
+        1149.5,
+        673.0
+      ]
+    },
+    {
+      "track_id": 5,
+      "frame": 93,
+      "timestamp": 3.1,
+      "gate_id": "gate_1",
+      "direction": "SOUTHWARD",
+      "position": [
+        1137.5,
+        678.0
+      ]
+    },
+    {
+      "track_id": 6,
+      "frame": 127,
+      "timestamp": 4.24,
+      "gate_id": "gate_1",
+      "direction": "SOUTHWARD",
+      "position": [
+        1446.0,
+        679.0
+      ]
+    },
+    {
+      "track_id": 7,
+      "frame": 129,
+      "timestamp": 4.3,
+      "gate_id": "gate_1",
+      "direction": "SOUTHWARD",
+      "position": [
+        1087.5,
+        684.0
+      ]
+    },
+    {
+      "track_id": 9,
+      "frame": 234,
+      "timestamp": 7.81,
+      "gate_id": "gate_1",
+      "direction": "SOUTHWARD",
+      "position": [
+        1130.5,
+        664.0
+      ]
+    },
+    {
+      "track_id": 15,
+      "frame": 242,
+      "timestamp": 8.07,
+      "gate_id": "gate_1",
+      "direction": "SOUTHWARD",
+      "position": [
+        1434.5,
+        692.0
+      ]
+    },
+    {
+      "track_id": 20,
+      "frame": 250,
+      "timestamp": 8.34,
+      "gate_id": "gate_1",
+      "direction": "SOUTHWARD",
+      "position": [
+        942.5,
+        670.0
+      ]
+    },
+    {
+      "track_id": 22,
+      "frame": 277,
+      "timestamp": 9.24,
+      "gate_id": "gate_1",
+      "direction": "SOUTHWARD",
+      "position": [
+        699.5,
+        660.0
+      ]
+    },
+    {
+      "track_id": 21,
+      "frame": 301,
+      "timestamp": 10.04,
+      "gate_id": "gate_1",
+      "direction": "SOUTHWARD",
+      "position": [
+        1148.5,
+        689.0
+      ]
+    }
+  ],
+  "flow": {
+    "flow_rate_vph": 3220.7
+  },
+  "events": {
+    "total_finalized_events": 0,
+    "events_list": []
+  },
+  "congestion": {
+    "state": "FREE_FLOW",
+    "reason": "FREE_FLOW because average speed (66.8 km/h) >= 50.0 km/h threshold AND density (8.8 veh/km) < 80.0 veh/km AND queue length (0.0 m) < 50.0 m."
+  }
+}

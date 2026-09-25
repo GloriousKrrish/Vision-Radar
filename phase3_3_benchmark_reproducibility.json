@@ -1,0 +1,35 @@
+{
+  "reproducible": true,
+  "diffs": [],
+  "run_A_metrics": {
+    "vehicles_evaluated": 0,
+    "valid_samples": 0,
+    "rejected_samples": 31,
+    "mae_kmh": 0.0,
+    "rmse_kmh": 0.0,
+    "median_ae_kmh": 0.0,
+    "p95_ae_kmh": 0.0,
+    "mape_percent": 0.0,
+    "bias_kmh": 0.0,
+    "r2_score": 0.0,
+    "std_dev_kmh": 0.0
+  },
+  "run_B_metrics": {
+    "total_vehicles_evaluated": 0,
+    "total_valid_samples": 0,
+    "total_rejected_samples": 31,
+    "mae_kmh": 0.0,
+    "rmse_kmh": 0.0,
+    "median_ae_kmh": 0.0,
+    "p95_ae_kmh": 0.0,
+    "mape_percent": 0.0,
+    "bias_kmh": 0.0,
+    "r2_score": 0.0,
+    "std_dev_error_kmh": 0.0,
+    "min_error_kmh": 0.0,
+    "max_error_kmh": 0.0,
+    "error_by_speed_range": {},
+    "error_by_distance_zone": {},
+    "error_by_lane": {}
+  }
+}

@@ -1,0 +1,576 @@
+# VISIONRADAR: Master Blueprint (v0.1)
+
+**How to read this.** I did not run live searches for this response. Everything below comes from what I know of the field. I only cite works I'm confident exist, and I leave out DOIs and exact numbers I can't stand behind. Anything marked **RV** (REQUIRES VERIFICATION) must be checked at the primary source before it goes into your proposal or paper. Section 65 gives the verification order.
+
+---
+
+## 1. Executive Summary
+
+VisionRadar takes fixed-camera traffic video and produces tracked vehicles, calibrated road-plane trajectories, speed estimates with uncertainty, traffic analytics, and human-reviewed evidence events. It is a modular monolith, CPU-first, with a local filesystem and SQLite.
+
+**The most important decision in this whole document:** speed estimation is only defensible if you have ground-truth speed to compare against. Most popular datasets (UA-DETRAC, BDD100K, KITTI) are not suitable for that. Your whole research contribution depends on solving the ground-truth problem (sections 12, 16, 17).
+
+**My recommended direction:** a research paper on *error-decomposed, uncertainty-aware monocular speed estimation*. The product is the platform that makes those experiments reproducible.
+
+---
+
+## 2. Product Vision
+
+- **Vision:** a trustworthy, reproducible, offline-capable workbench for turning traffic video into measured, auditable traffic facts.
+- **Mission:** make every number traceable to a video, a calibration, a model version and a parameter set.
+- **What differentiates it from "a vehicle detector with a web page":**
+  1. Calibration is a first-class, editable, versioned object.
+  2. Speed comes with an uncertainty estimate, not just a point value.
+  3. Every run is an experiment record, so the paper's tables come straight from the database.
+  4. Violations are review candidates, not verdicts.
+
+## 3. Problem Definition
+
+Camera-based speed and traffic analysis is usually done with closed, hardware-tied products, or with demo scripts that convert pixels to km/h using a single guessed scale factor. These give no error bounds and can't be reproduced or compared.
+
+**Core research problem:** how accurately can vehicle speed be recovered from a single uncalibrated or weakly calibrated camera, which error sources dominate (calibration, detection anchor point, tracker, timing, smoothing), and how should uncertainty be reported?
+
+**Core software problem:** a reproducible pipeline and workbench around that question.
+
+## 4. Target Users
+
+| User | Need |
+|---|---|
+| Researcher (your team, primarily) | Run controlled experiments, compare configs |
+| Traffic analyst | Counts, speeds and flow from recorded footage |
+| Reviewer | Accept or reject candidate events |
+| Professor or evaluator | See a reproducible demo and traceable results |
+
+## 5. User Personas
+
+- **Aditi, the researcher.** Wants to swap a detector or tracker and see the metric change with everything else fixed.
+- **Rahul, the analyst.** Has a 30-minute clip from a junction. Wants a defensible count and speed histogram and a CSV.
+- **Meera, the reviewer.** Has 40 flagged events and needs a fast accept/reject flow with evidence frames.
+- **Prof. Kulkarni, the evaluator.** Wants to know where the numbers came from, whether they can be reproduced, and where the system fails.
+
+## 6. User Journeys
+
+1. **Analyze a clip:** create a project, upload a video, define calibration (click 4+ reference points, enter real distances), choose a config, run the job, watch progress, open the analysis workspace, view analytics, export a report.
+2. **Run an experiment:** select a video/dataset, choose detector, tracker and speed method, run, then compare against ground truth on the experiment page.
+3. **Review events:** open the event queue, view the evidence frame and clip, accept or reject with a note, export accepted events.
+
+## 7. Functional Requirements (prioritized)
+
+- **P0 (MVP):** video upload and validation; detection; tracking; manual calibration (homography from point pairs); speed per track; per-track and per-video CSV/JSON; annotated output video; basic analytics.
+- **P1 (V1):** analysis workspace with overlays; experiment engine with ground-truth metrics; model registry; violation candidates plus evidence and review; PDF report; uncertainty estimates.
+- **P2 (V2):** lane analysis, wrong-way detection, semi-automatic calibration, ANPR (optional), multi-video comparison.
+- **Never build:** automated enforcement or legal fines, face recognition, live multi-camera fleets.
+
+## 8. Non-Functional Requirements
+
+- **Reproducibility:** each run stores config, code git hash, model hash, package versions and seed.
+- **Determinism:** same input and config gives the same output (or documented tolerance).
+- **CPU feasibility:** must run without a GPU. Target: offline batch processing, *not* a real-time claim. Any FPS figure must be measured and reported with hardware details.
+- **Offline:** works with no internet after setup.
+- **Security:** validated uploads, no path exposure, local-only by default.
+- **Observability:** structured logs, job states, a health page.
+- **Licensing hygiene:** every dependency and model has a recorded license.
+
+---
+
+## 9. Competitor / Existing System Research
+
+I'm confident these exist. Feature and licensing details are **RV**.
+
+| System | What it is | Strength | Limitation for us |
+|---|---|---|---|
+| NVIDIA DeepStream / Metropolis | GPU video analytics SDK | Optimized, mature | NVIDIA GPU dependent; not a workbench (RV: licensing) |
+| Ultralytics "solutions" (speed estimation) | Demo module in a popular library | Quick to try | Pixel-scale approach; AGPL-3.0 implications (RV) |
+| Roboflow `supervision` (MIT, RV) | Library with a speed-estimation example using perspective transform | Clean building blocks | Library, not a platform; no ground-truth evaluation |
+| Frigate NVR / Viseron | Open-source camera NVRs with detection | Good UI patterns, event review | Security-camera oriented, no speed or calibration |
+| OpenALPR lineage, Rekor | ANPR products | Mature ANPR | Commercial (RV) |
+| CVAT, Label Studio | Annotation tools | Timeline and track UI patterns | Not analytics |
+| Commercial ITS vendors (Axis, Hikvision, etc.) | Hardware-integrated | Enterprise features | Closed, hardware-tied |
+| Indian government ITS deployments | Various programs | Real-world relevance | Details unpublished or **RV** |
+
+**Defensible scope:** none of the open items above combine (a) editable calibration, (b) uncertainty-aware speed, (c) ground-truth evaluation, and (d) an experiment registry. That is your niche. Confirm by a targeted GitHub and literature search before you claim novelty. **RV.**
+
+## 10. Research Landscape
+
+Six sub-areas: detection, multi-object tracking, camera calibration (including automatic traffic-camera calibration), single-camera speed measurement, ALPR, and datasets/metrics. Speed measurement work splits into (a) manual-calibration homography methods, (b) vanishing-point automatic calibration, and (c) 3D-bounding-box or model-alignment methods. The main pain point in this literature is ground-truth scarcity.
+
+## 11. Research Papers (all real; DOIs and exact venue details **RV**)
+
+| # | Paper | Venue / year | Relevance |
+|---|---|---|---|
+| 1 | Redmon et al., "You Only Look Once" | CVPR 2016 | Detector family origin |
+| 2 | Ren et al., "Faster R-CNN" | NeurIPS 2015 / TPAMI 2017 | Two-stage baseline |
+| 3 | Ge et al., "YOLOX" | arXiv 2021 | Apache-licensed detector option |
+| 4 | Wang, Bochkovskiy, Liao, "YOLOv7" | CVPR 2023 | Strong real-time detector |
+| 5 | Carion et al., "DETR" | ECCV 2020 | Transformer detection |
+| 6 | Bewley et al., "Simple Online and Realtime Tracking (SORT)" | ICIP 2016 | Tracking baseline |
+| 7 | Wojke et al., "Simple Online and Realtime Tracking with a Deep Association Metric (DeepSORT)" | ICIP 2017 | Appearance-based tracking |
+| 8 | Zhang et al., "ByteTrack" | ECCV 2022 | Uses low-score boxes; strong and simple |
+| 9 | Cao et al., "Observation-Centric SORT (OC-SORT)" | CVPR 2023 | Robust to occlusion and non-linear motion |
+| 10 | Wen et al., "UA-DETRAC" | CVIU 2020 (arXiv 1511.04136) | Detection and tracking dataset |
+| 11 | Dubská, Herout, Sochor, "Automatic Camera Calibration for Traffic Understanding" | BMVC 2014 | Vanishing-point auto-calibration |
+| 12 | Sochor, Juránek, Herout, "Traffic surveillance camera calibration by 3D model bounding box alignment for accurate vehicle speed measurement" | CVIU 2017 | Calibration for speed |
+| 13 | Sochor et al., "Comprehensive Data Set for Automatic Single Camera Visual Speed Measurement" (BrnoCompSpeed) | IEEE T-ITS 2018 | The key speed dataset and evaluation protocol |
+| 14 | Luvizon, Nassu, Minetto, "A Video-Based System for Vehicle Speed Measurement in Urban Roadways" | IEEE T-ITS 2017 | Complete single-camera pipeline plus dataset |
+| 15 | Bernardin & Stiefelhagen (CLEAR MOT), 2008; Luiten et al. (HOTA), IJCV 2021 | — | Tracking metrics |
+| 16 | Hartley & Zisserman, *Multiple View Geometry* | Cambridge UP | Homography theory (book) |
+| 17 | Zhang, "A Flexible New Technique for Camera Calibration" | TPAMI 2000 | Intrinsic calibration |
+| 18 | Laroca et al., "A Robust Real-Time Automatic License Plate Recognition Based on the YOLO Detector" | IJCNN 2018 | ANPR pipeline |
+| 19 | Yu et al., "BDD100K" | CVPR 2020 | Driving dataset |
+| 20 | Geiger et al., "Are We Ready for Autonomous Driving? KITTI" | CVPR 2012 | Driving dataset |
+
+Also relevant: the NVIDIA AI City Challenge overview papers (CVPR workshops; the 2018 edition had a speed-estimation track, **RV**).
+
+---
+
+## 12. Dataset Research
+
+| Dataset | Content | Speed ground truth? | Suitability | Caveats |
+|---|---|---|---|---|
+| **BrnoCompSpeed** | Fixed-camera highway videos, multiple sites and views; speed ground truth from a laser/LiDAR system (I believe) | **Yes** (per paper; **RV** exact details) | **Best for the speed research question** | Access may need a request or agreement; license and size **RV**; highway, not Indian mixed traffic |
+| **UA-DETRAC** | Fixed cameras (Beijing/Tianjin), boxes and tracks, classes car/bus/van/others | **No** | Detector and tracker evaluation, counting | Download availability and license **RV** (historically non-commercial) |
+| **AI City Challenge** | Multiple tracks over the years | Some years had speed GT (**RV**) | Possible extra source | Registration and data-use agreement required; **RV** |
+| **BDD100K** | Dashcam, 100k videos, detection and MOT subsets | **No** meaningful for fixed-camera speed | Detector fine-tuning only | Moving camera, so homography-on-road-plane method doesn't apply. License **RV** |
+| **KITTI** | Ego-vehicle sensors | 3D tracks exist, but moving camera | Not for our method | CC BY-NC-SA (RV) |
+| ANPR sets (CCPD, UFPR-ALPR, Indian plate sets on Kaggle/Roboflow) | Plates | n/a | Optional V2 | Licenses vary widely; Indian plate sets are inconsistent in quality (**RV**) |
+
+**Ground-truth fallback plan (essential):**
+1. **Synthetic videos** with known speed (Blender or a simple 3D renderer, free). This validates the *math*, since geometry error is fully known.
+2. **Self-recorded clips** using a phone you already own (no purchase). Use known road-marking distances or tape-measured baselines, and a cooperating vehicle at a controlled speed. Speedometer ground truth is itself imperfect, so document its error.
+3. **Timed gate ground truth:** measure real crossing times between two physical markers from video and compare.
+
+Budget storage: video datasets can run tens to hundreds of GB. Check sizes before downloading. **RV.**
+
+---
+
+## 13. CV Technology Comparison
+
+**Detectors** (CPU feasibility depends on model size and input resolution; measure it):
+
+| Option | License (RV) | Notes |
+|---|---|---|
+| Ultralytics YOLOv8/YOLO11 | AGPL-3.0 | Easiest ecosystem, nano/small run on CPU at reduced FPS. AGPL is fine for coursework but constrains open distribution and commercial futures |
+| YOLOX | Apache-2.0 | Permissive; good default for licensing hygiene |
+| YOLOv7 | GPL-3.0 | Strong, but copyleft |
+| torchvision Faster R-CNN / SSDlite | BSD | Slow (R-CNN) or lower accuracy (SSDlite); good baselines |
+| RT-DETR | Apache-2.0 in original repo (Ultralytics port is AGPL) | Heavier on CPU |
+| RTMDet (MMDetection) | Apache-2.0 | Good, heavier setup |
+
+**Recommendation:** ship **one baseline behind a `Detector` interface** and a second for comparison. Default pick: a YOLOX or YOLOv8-nano-class model. Choose after a small CPU benchmark on your own machine. Pretrained COCO weights already cover car, bus, truck and motorcycle; fine-tuning is optional (Colab/Kaggle free GPUs may help, but quotas change, **RV**).
+
+**Classification:** use the detector's classes (car, bus, truck, motorcycle, bicycle). Fine-grained classification is out of scope.
+
+**Segmentation:** not needed for MVP. Optional for lane masks or road-plane region.
+
+**OCR (V2):** EasyOCR (Apache-2.0) or PaddleOCR (Apache-2.0) or Tesseract (Apache-2.0). Indian plates are hard: varied fonts, HSRP vs older plates, tilt, low resolution. Treat as optional and report failure honestly.
+
+## 14. Model Selection Analysis
+
+Decision criteria, in order: license → CPU throughput at your target resolution → COCO-vehicle accuracy on your data → integration effort. Plan a benchmark (a script in your experiment engine) comparing 2–3 detectors on the same clips. Report mAP (only if you have labels), detections per second, and downstream tracking and speed error. Do not pick by reputation.
+
+## 15. Tracking Selection Analysis
+
+| Tracker | Why | Risks |
+|---|---|---|
+| **ByteTrack** | No appearance model, fast on CPU, strong on crowded scenes | ID switches at occlusion |
+| **OC-SORT** | Better with non-linear motion, still cheap | Fewer maintained integrations |
+| DeepSORT/StrongSORT | Appearance re-ID | Extra CPU cost; re-ID trained on other domains |
+| SORT | Baseline | Weak at occlusion |
+
+**Recommendation:** ByteTrack primary, OC-SORT and SORT as ablations. Implement a `Tracker` interface. For speed, ID stability matters more than MOTA: a switched ID corrupts a speed track. Track "fragmentation rate" as its own metric.
+
+## 16. Speed Estimation Research
+
+**Three distinct quantities, never conflate them:**
+
+1. **Pixel displacement:** Δ(u,v) in the image. Meaningless as speed, because perspective makes the same pixel motion correspond to different real distances.
+2. **Real-world distance:** requires mapping to a metric plane.
+3. **Physical speed:** distance over *time*, and time must come from frame timestamps.
+
+**Method:**
+- Image → road-plane mapping: **homography H** (3×3), estimated from ≥4 point correspondences whose real-world distances you know. Point on plane: `[X,Y,1]ᵀ ∼ H·[u,v,1]ᵀ`.
+- **Anchor point matters:** map a point *on the road* (e.g., bottom-center of the bounding box, or better a wheel-contact estimate), not the box center. The box center is above the plane and biases the result. Study this as an ablation.
+- **Speed:** `v = ‖P(t₂) − P(t₁)‖ / (t₂ − t₁)`. Instead of two points, fit a line to `X(t), Y(t)` over a window (least squares); speed is the slope. Alternatives: Kalman filter on world coordinates.
+- **Timing:** use presentation timestamps from the container, not an assumed constant FPS, because variable frame rate is common in phone and web video. Also handle frame dropping in your own pipeline.
+- **Uncertainty:** propagate position noise σ and window length. For a two-point estimate, error scales like `√2·σ_pos/Δt`, so longer windows reduce noise but blur acceleration. Report a confidence interval per track (bootstrapping over the window, or propagated calibration error via perturbing reference points).
+- **Virtual gates (alternative):** speed = known gate spacing ÷ crossing time. Cheaper, and a useful independent estimate.
+
+**Metrics:** per-vehicle signed error (bias), MAE, RMSE, MAPE (careful at low speeds), fraction within ±X km/h, error vs distance from camera, and coverage of the reported intervals. BrnoCompSpeed defines its own protocol, and you should follow it where you use that dataset (**RV**).
+
+## 17. Calibration Strategy
+
+1. **MVP:** manual homography via reference points on lane markings with known lengths. Check the road authority's standard for dash lengths in your region before using them as a scale (**RV**). Otherwise measure them physically.
+2. **V1:** intrinsic correction if lens distortion is visible (checkerboard, if you can print one for free), reprojection-error display, and a calibration quality score.
+3. **V2:** semi-automatic calibration from vanishing points (Dubská et al.) with a single scale reference.
+4. Store calibration as a versioned object with points, H, and its error estimate. Every speed result references a calibration version.
+
+**Limits to be honest about:** flat-road assumption, uphill or curved roads, camera shake, and lens distortion all bias results.
+
+## 18. Research Gap Candidates
+
+1. **Error decomposition:** the literature usually reports one end-to-end error. A controlled attribution (calibration vs anchor point vs tracker vs timing vs smoothing) is more useful and feasible with an experiment engine. **Feasible, novel enough.**
+2. **Uncertainty-aware speed:** interval outputs and calibration of those intervals. **Feasible.**
+3. **Robustness to camera perspective/height:** vary synthetic camera pose and quantify degradation. **Feasible with synthetic data.**
+4. **Mixed / Indian traffic (two-wheelers, autos, no lane discipline):** relevant, but you need data with ground truth. **Risky.**
+5. **Fully automatic calibration:** ambitious; prior work exists. **Too big for MVP.**
+
+## 19. Recommended Research Direction
+
+Gaps 1 + 2 + 3 together: **"An error-decomposed, uncertainty-aware evaluation of monocular vehicle speed estimation."** Validate on synthetic data, then BrnoCompSpeed if you can get it, then your own clips. Novelty must be confirmed by a literature search. **RV.** Working title stays flexible.
+
+**Product vs research (explicit):**
+
+| Product feature | Research contribution |
+|---|---|
+| Speed dashboard | Error attribution and uncertainty method |
+| Violation queue | Robust trajectory filtering and its effect on false flags |
+| Experiment page | The protocol that makes results reproducible |
+
+---
+
+## 20–23. Scope Levels
+
+**MVP (minimum working CV system):** upload → decode → detect → track → manual calibration → speed per track → annotated video + CSV/JSON. CLI first, then a thin API. No auth, no ANPR, single user, SQLite.
+
+**V1 (strong academic project):** the above plus workspace UI with overlays, experiment engine with metrics, model registry, ground-truth evaluation, uncertainty output, violation candidates with evidence and review, analytics dashboard, PDF report, tests, and docs.
+
+**V2 (ambitious):** lane and wrong-way analysis, semi-automatic calibration, optional ANPR, multi-video comparison, auth/roles if useful.
+
+**V3 (future):** live RTSP ingest, PostgreSQL, worker queue, multi-camera, object storage, GPU serving. Design interfaces now; build nothing.
+
+---
+
+## 24. System Architecture
+
+**Modular monolith, two processes:** a FastAPI app (API plus static frontend) and a separate worker process that polls a `processing_jobs` table (no Celery, no Redis; add only if measured need appears). Both share the same Python package.
+
+```
+React SPA ──HTTP──► FastAPI (routers → services → repositories)
+                       │                    │
+                       │                    ▼
+                       │                 SQLite (WAL)
+                       ▼
+                 jobs table ◄── polled by ── Worker process
+                                              │
+                                              ▼
+                                   CV engine (pluggable stages)
+                                              │
+                                              ▼
+                                   Local filesystem storage
+```
+
+Microservices are not justified. A `Storage` interface is enough for future S3.
+
+## 25. CV Architecture
+
+Pipeline as **independent, typed stages** with a config-driven registry:
+
+`Decoder (PyAV/OpenCV, PTS timestamps) → Preprocess → Detector → Tracker → TrajectoryBuilder → Calibrator/Projector → SpeedEstimator → Analytics → ViolationRules → EvidenceWriter`
+
+Improvements over your draft:
+- **Two-stage processing:** stage A (detect + track) writes raw tracks to disk once. Stage B (calibrate → speed → analytics → violations) re-runs cheaply on stored tracks. This makes ablations over calibration and speed methods very fast, which is what the research needs.
+- Frame skipping and resize are explicit, logged parameters.
+- Every stage records timing.
+- Region-of-interest and gates are part of the config.
+
+## 26. Backend Architecture
+
+- Python 3.11+, FastAPI, Pydantic v2, SQLAlchemy 2 + Alembic, OpenCV, PyAV or FFmpeg (subprocess).
+- Layers: `api/` (routers, schemas) → `services/` → `repositories/` → `models/`, with `cv/` and `worker/` isolated from the web layer.
+- Job states: `queued → running → succeeded | failed | cancelled`, with progress, heartbeat and resumability where cheap.
+- Structured JSON logging with run IDs; consistent error envelope; API prefix `/api/v1`.
+- Config through `pydantic-settings` and `.env`.
+
+## 27. Frontend Architecture
+
+React + Vite + TypeScript, TanStack Query (server state), Zustand (small UI state), React Router, Tailwind + Radix primitives (shadcn/ui style, MIT), Lucide icons, charts via Recharts or Apache ECharts (both free; choose ECharts if you need many points).
+
+**Video overlays:** draw on a `<canvas>` above `<video>`, synchronized using `requestVideoFrameCallback` and per-frame metadata. Note that the HTML video element is **not natively frame-accurate for stepping**. Options: (a) use frame-time metadata with `requestVideoFrameCallback` and accept small tolerance, (b) also render an annotated MP4 in the backend as the "guaranteed accurate" view. Do both. Overlay data is served in chunked JSON/NDJSON by time range, not one giant file.
+
+## 28. Database Architecture
+
+SQLite (WAL, foreign keys ON), Alembic migrations. Large per-frame data (raw tracks) lives as Parquet or compressed files on disk, indexed by the DB; the DB holds metadata and derived, queryable records.
+
+```
+users(1)─┬─(N)projects(1)─┬─(N)videos(1)─(N)processing_jobs(1)─┬─(N)tracks(1)─(N)speed_measurements
+         │                │                                     ├─(N)violations(1)─(N)evidence
+         │                │                                     └─(1)experiment_runs
+         │                └─(N)calibrations (versioned)
+models(1)─(N)model_versions ─(N)experiment_runs (N)─(1)datasets
+reports ─ jobs ; system_events (standalone)
+```
+
+Key fields: every table has `id`, `created_at`, `updated_at`; jobs/experiments carry `status`, `config_json`, `git_hash`, `env_json`; tracks carry `class`, `first_ts`, `last_ts`, `file_ref`; speed measurements carry `method`, `calibration_id`, `value_kmh`, `ci_low/high`, `window`; violations carry `review_status`, `reviewed_by`, `note`. Skip a per-frame `frames` table for MVP (too large), and store it in files. Index on `(job_id)`, `(video_id)`, `(status)`, `(start_ts)`.
+
+## 29. API Architecture (essential endpoints only)
+
+| Area | Endpoints |
+|---|---|
+| Projects | `POST/GET /projects`, `GET/PATCH/DELETE /projects/{id}` |
+| Videos | `POST /projects/{id}/videos` (multipart), `GET /videos/{id}`, `GET /videos/{id}/stream` (range requests) |
+| Calibration | `PUT /videos/{id}/calibration`, `GET .../calibration` |
+| Jobs | `POST /videos/{id}/jobs`, `GET /jobs/{id}`, `POST /jobs/{id}/cancel`, `GET /jobs/{id}/overlay?from&to` |
+| Tracks / speeds | `GET /jobs/{id}/tracks` (paginate, filter class, sort speed) |
+| Violations | `GET /violations`, `PATCH /violations/{id}` (accept/reject) |
+| Analytics | `GET /jobs/{id}/analytics/{summary,speed-histogram,flow}` |
+| Experiments | `POST/GET /experiments`, `GET /experiments/{id}`, `GET /experiments/compare?ids=` |
+| Models | `GET/POST /models`, `GET /models/{id}/versions` |
+| Reports | `POST /jobs/{id}/reports` (pdf/csv/json), `GET /reports/{id}` |
+| System | `GET /health`, `GET /system/status` |
+
+Pagination is `limit/offset` (cursor later). All lists support filter and sort params. Auth endpoints are deferred (section 33). Updates of job state can start with polling; add SSE only if needed.
+
+## 30. File Storage Architecture
+
+```
+data/
+  datasets/   videos/   models/   outputs/   evidence/   reports/   experiments/
+```
+Files are addressed by opaque IDs (UUID/hash), never user-supplied names. The DB stores relative keys. A `Storage` interface (`put/get/open/delete`) has one local implementation; S3 is a later swap. Add a dataset manifest (SHA-256, source URL, license note) for each dataset.
+
+## 31. Experiment Architecture
+
+An experiment is a **frozen recipe**: dataset/video, detector+version, tracker+params, calibration version, speed method+params, seed. Running it writes an `experiment_run` with metrics, runtime, FPS, hardware (CPU/RAM/GPU), software versions, git hash and artifact paths. Metrics are computed by code against ground-truth files, never typed by hand. A comparison view and a `export_results.py` that emits LaTeX/CSV tables directly from the DB give you a paper whose numbers are traceable.
+
+## 32. Model Management Architecture
+
+`models` (logical: VehicleDetector) → `model_versions` (file hash, path, source, license, training dataset, metrics *measured by the experiment engine*, status: baseline/candidate/retired). No metric field may be filled unless it references an experiment run.
+
+## 33. Security Architecture
+
+- **Auth:** not needed for MVP (local, single-user). If the app will ever be network-exposed, add local login with argon2/bcrypt and two roles (Admin, Viewer). Four roles are not justified.
+- Upload: extension *and* magic-byte check, ffprobe validation, size/duration limits, decode in a subprocess with timeout, randomized storage name, no serving of arbitrary paths.
+- Path traversal: resolve and verify inside the data root.
+- CORS to the known origin only, secrets from env, rate limiting only if exposed, no filesystem paths in API responses, log redaction.
+
+## 34. Testing Architecture
+
+`pytest` (unit, repository, API via TestClient, pipeline tests on tiny fixtures), golden-file tests for the homography and speed math using synthetic tracks with exactly known speed, Vitest + Testing Library (frontend), Playwright (end-to-end). Failure-case fixtures: corrupt file, empty video, unsupported codec, no vehicles, heavy crowd, night/low light, tracking loss, missing model, out-of-memory (simulated), job interrupted and resumed. CI on GitHub Actions free tier (limits **RV**).
+
+## 35. DevOps Architecture
+
+`pyproject.toml` (uv or pip-tools) with pinned lock, `pnpm`/`npm` lockfile, `Makefile` or `justfile`, pre-commit (ruff, black, mypy, eslint, prettier), `.env.example`, git-lfs *not* needed (keep large data out of git; document downloads). Docker: optional, added late; native local dev must work first.
+
+## 36. Folder Structure
+
+```
+visionradar/
+  apps/
+    api/          FastAPI app (routers, schemas, deps)
+    web/          React frontend
+  packages/
+    visionradar/   core Python package
+      cv/          decode, detect, track, calibrate, speed, analytics, rules
+      services/    application logic
+      repositories/ data access
+      models/      ORM models
+      experiments/ runner, metrics, ground-truth loaders
+      worker/      job runner
+      storage/     storage abstraction
+      config/
+  data/            (gitignored) datasets, videos, models, outputs...
+  configs/         YAML experiment / pipeline configs
+  scripts/         download_datasets, export_results, benchmark
+  tests/           unit / integration / e2e / fixtures
+  docs/            architecture, cv-methodology, datasets, api, research-notes
+  research/        paper drafts, bibliography (BibTeX), figures
+  .github/         workflows
+```
+`packages/` keeps CV code independent of the web layer so experiments run headless from the CLI.
+
+---
+
+## 37. UI/UX Research
+
+Patterns to study directly (open the products and screenshot them): CVAT (timeline + track lanes), Frigate (event review), Grafana/Datadog-style observability (dense but calm dashboards), Label Studio. **RV** for specific UI details, since I'm working from general familiarity.
+
+## 38. Design System
+
+Philosophy: quiet, dense, instrument-like. Neutral surfaces, one accent, information first.
+- Dark-first with a light theme, semantic tokens only.
+- Radius 6–8px (no giant pill cards), 1px borders over shadows, minimal elevation.
+- Spacing on a 4px grid. Tables are the primary data surface.
+- Components: buttons, inputs, selects, tabs, table (sortable/paginated), badges, tooltips, modals, toasts, skeleton loaders.
+
+## 39. Typography
+**Inter** for UI, **JetBrains Mono** for numbers, IDs and timestamps (tabular figures for alignment). Both are OFL-licensed. Scale: 12/13/14/16/20/28.
+
+## 40. Color System
+- Neutrals: slate/zinc ramp, 9 steps.
+- Accent: one desaturated blue or teal.
+- Semantic: green (success), amber (warning/candidate), red (violation/error), plus a fixed categorical palette for vehicle classes, colorblind-safe, used consistently in overlays and charts.
+- Contrast target: WCAG AA.
+
+## 41. Icon System
+**Lucide** (ISC license, consistent stroke style, tree-shakeable). Mapping: car/truck/bus → `Car`/`Truck`/`Bus`; speed → `Gauge`; camera → `Camera`; video → `Video`; analytics → `BarChart3`; violation → `TriangleAlert`; tracking → `Route`; calibration → `Crosshair`/`Ruler`; evidence → `FileImage`; reports → `FileText`; datasets → `Database`; models → `Cpu`/`Box`; experiments → `FlaskConical`; settings → `Settings`; users → `Users`; system status → `Activity`. Icon names may differ by version, so verify against the installed package.
+
+## 42. Component System
+Build on Radix + Tailwind; a `components/ui` layer (primitives) and `components/domain` layer (VehicleBadge, SpeedCell, TrackTimeline, CalibrationCanvas, EvidenceCard, MetricStat). Document them in Storybook only if time allows.
+
+## 43. Video Player Design
+Layout: video canvas center, right inspector panel (selected track details, speed with interval), bottom timeline with event markers and track lanes. Controls: play/pause, scrub, ±1 frame step, ±N sec, speeds 0.25–2×, fullscreen, timestamp+frame index, snapshot. Overlay toggles (persisted): boxes, IDs, class, speed, confidence, trajectories (fading tails, last N seconds), ROI, calibration grid, gates, violation flags. Defaults show **boxes + ID + speed only** to avoid clutter. Click a vehicle to select and focus it. Keyboard shortcuts (space, ←/→, `.`/`,`).
+
+## 44. Dashboard Design
+Top row: 6 stat tiles (vehicles, active tracks, mean speed, p85 speed, max speed, candidate violations). Then: vehicles-over-time (line), speed histogram, class distribution (bar), and a processing-performance panel (FPS, per-stage time). Show "measured on <hardware>" beside FPS. Include a recent-jobs table and system health chip.
+
+## 45. Analytics Design
+Tabs: Overview, Traffic Flow, Speed, Vehicles, Violations, System Performance. Shared filter bar: project, video, time range, vehicle class, with export CSV. Speed tab shows histogram, p50/p85/p95, and error-vs-distance when ground truth exists.
+
+## 46. Evidence Design
+Event card: event ID, track ID, timestamp and video offset, estimated speed ± interval, speed limit, rule, confidence, evidence frames (before/at/after), config and processing version. Actions: accept, reject (with reason), export. Persistent banner: "Candidate for human review, not an enforcement decision."
+
+## 47. Error / Loading / Empty States
+Skeletons for tables and charts; determinate progress for jobs with stage name and ETA (labelled estimate); empty states explain the next action ("Upload a video to begin"); errors show a human message plus a copyable technical detail and job/log link; success toasts are brief.
+
+## 48. Animation Strategy
+Functional only: 120–200ms transitions for panels and hover, progress bars, and fading trajectory tails. Respect `prefers-reduced-motion`. No decorative effects.
+
+## 49. Accessibility
+Keyboard operability for player and tables, focus rings, ARIA labels, AA contrast, non-color cues (icons and text alongside color in overlays and badges), reduced motion, screen-reader labels for chart summaries.
+
+## 50. Performance Strategy
+Measure first. Levers: input resize, frame skipping, ONNX Runtime or OpenVINO for CPU (both free; gains **RV**, measure), detection every N frames with tracker prediction between, batching, and the two-stage cache. Report numbers with hardware specs. Frontend: virtualize long tables, downsample chart data, chunked overlay loading.
+
+---
+
+## 51. Free Software Stack
+
+Python, FastAPI, Pydantic, SQLAlchemy, Alembic, SQLite, OpenCV, PyAV/FFmpeg, NumPy, SciPy, pandas, PyTorch (CPU build), ONNX Runtime, supervision or your own tracker implementations, ReportLab or WeasyPrint (PDF), React, Vite, TypeScript, Tailwind, Radix, Lucide, TanStack Query, Zustand, Recharts/ECharts, pytest, Vitest, Playwright, ruff, mypy, GitHub free tier. All open-source. Confirm each license into `docs/licenses.md`.
+
+## 52. Zero-Budget Strategy
+Your laptops, local SQLite/files, public datasets, synthetic data from Blender, free Colab/Kaggle GPU sessions as optional (quota **RV**), university lab machines if allowed. Anything paid is optional and has a free substitute.
+
+## 53–55. Development Phases
+
+All phases are sequential unless noted. Each phase closes with the quality gate you specified. Effort is in person-weeks for a team of 3–4 and is a planning estimate, not measured.
+
+| Ph | Objective / key tasks | Deliverables (acceptance) | Effort | Not yet |
+|---|---|---|---|---|
+| 0 | Research, requirements, dataset access requests | Requirements doc, dataset decision, literature table (≥25 papers verified) | 2 | Any code |
+| 1 | Architecture + repo + CI | Repo skeleton, lint/test CI green, ADRs | 1 | UI |
+| 2 | Video ingestion | Validate/decode with PTS; fixtures; failure tests pass | 1 | Streaming |
+| 3 | Detection | `Detector` interface, 2 models, CPU benchmark script | 1.5 | Fine-tuning |
+| 4 | Tracking | ByteTrack + baseline; tracks saved; MOT metrics on UA-DETRAC subset | 1.5 | Re-ID |
+| 5 | Calibration | Homography tool, reprojection error, synthetic tests exact | 1.5 | Auto-calibration |
+| 6 | Speed estimation | Window-fit speed + interval; synthetic error near zero; first real-clip result | 2 | Deep learning speed |
+| 7 | Traffic analytics | Counts, flow, density, histograms | 1 | Lane logic |
+| 8 | Violation engine | Speed-limit rule (+ wrong-way if feasible) with tests | 1 | Signal violation |
+| 9 | Evidence | Frames + clip + metadata + review status | 1 | Legal claims |
+| 10 | Backend API | Endpoints above, OpenAPI docs, API tests | 2 | Auth |
+| 11 | Database | Schema, migrations, repos | 1 (parallel w/10) | Postgres |
+| 12 | Frontend foundation | Shell, design tokens, routing, API client | 1.5 | Charts |
+| 13 | Video analysis UI | Player, overlays, calibration canvas | 3 | Polish |
+| 14 | Analytics dashboard | Dashboard + tabs with real data | 1.5 | — |
+| 15 | Experiment engine | Runner, metrics, compare, export | 2 | — |
+| 16 | Reports | PDF/CSV/JSON | 1 | — |
+| 17 | ANPR (optional, gated by schedule) | Plate detect+OCR with honest accuracy on a small set | 2 | Legal use |
+| 18 | Testing | Coverage on core, e2e for demo path | 1.5 | — |
+| 19 | Performance | Profiled, ≥1 measured optimization | 1 | — |
+| 20 | Research experiments | Full experiment matrix run | 3 | New features |
+| 21 | Final integration | Demo path flawless, packaging | 1 | — |
+| 22 | Academic documentation | Paper, docs | 3 (overlaps) | — |
+| 23 | Final demo | Rehearsed, deterministic | 0.5 | — |
+
+Risks are covered per phase in section 56. Every acceptance line above is checkable by a test or a script.
+
+## 56. Risk Register
+
+| Risk | Severity | Mitigation |
+|---|---|---|
+| **No speed ground truth** | Critical | Synthetic + BrnoCompSpeed request + timed-gate self-recorded clips; decide by end of Phase 0 |
+| Dataset access denied or license limits | High | Have three sources in parallel; record license per dataset |
+| Scope creep (ANPR, signals, lanes) | High | Locked MVP/V1; ANPR gated |
+| CPU too slow | Medium | Frame skipping, small models, ONNX; claim offline batch only |
+| Tracker ID switches corrupt speeds | High | Track-quality filter, fragmentation metric, OC-SORT ablation |
+| Non-planar road, distortion, shake | Medium | State assumption, measure sensitivity, choose flat scenes |
+| AGPL/GPL model license | Medium | Interface abstraction, permissive default, document |
+| Front-end effort swallows research time | High | Research-first ordering; UI phases timeboxed; CLI always works |
+| ANPR on Indian plates fails | High | Optional, small controlled set, honest reporting |
+| Team coordination | Medium | Weekly integration, clear ownership |
+| Novelty already published | Medium | Do the literature search in Phase 0; reframe as comparative/reproducibility study if needed |
+| Evidence misread as enforcement | Medium | Human-in-loop banner and language |
+
+## 57. Timeline
+
+Your semester length and deadlines are unknown. Assuming roughly 16 weeks, the parallel schedule is:
+- Weeks 1–2: research and decisions (Ph0–1)
+- Weeks 3–8: CV core (Ph2–9)
+- Weeks 6–12: API, DB, UI (Ph10–14, overlapping)
+- Weeks 10–14: experiments, reports (Ph15–16, 20)
+- Weeks 14–16: integration, paper, demo (Ph21–23)
+
+If you have less time, drop Ph17 first, then simplify Ph13 and Ph16.
+
+## 58. Team Roles (3–4 students)
+
+1. **CV/Research lead:** detection, tracking, paper's methodology and experiments.
+2. **Geometry/Speed lead:** calibration, speed, uncertainty, ground truth.
+3. **Backend/Data lead:** API, DB, worker, experiment engine, storage.
+4. **Frontend/UX lead:** design system, player, dashboards, demo polish.
+With 3 people, combine roles 3 and 4's shared items and cut UI scope. Everyone writes tests for their own code and shares documentation and paper sections.
+
+## 59. Academic Requirement Mapping
+
+| Requirement | Artifact |
+|---|---|
+| Title, timeline | Proposal PPT; sections 57 and 19 |
+| Problem statement, objectives | Section 3 and 7 refined into the proposal |
+| Literature survey, research gap | Verified paper table (Ph0), sections 11 and 18 |
+| Methodology | `docs/cv-methodology.md` (section 16, 17) |
+| Dataset | `docs/datasets.md` + manifests |
+| Software, libraries, hardware | Section 51 + measured hardware profile |
+| Expected results | Hypotheses stated *before* experiments, no numeric claims until measured |
+| Implementation | Repo |
+| Experiments, analysis | Experiment engine export |
+| Contribution | Section 19 table |
+| Research paper | `research/` LaTeX |
+| Final demo, PPT | Sections 60 and 63 |
+
+## 60. Professor Demo Plan (8 minutes, deterministic)
+
+Use a fixed, pre-selected clip and a pre-made calibration.
+1. Upload the clip (0:30). 2. Show the calibration and reprojection error (0:45). 3. Start the job, show stage progress (0:30, use a short clip or cached run). 4. Open the workspace: boxes, IDs, trajectories (1:15). 5. Speed labels with intervals (1:00). 6. Analytics (0:45). 7. A flagged candidate, evidence frame and review (1:00). 8. Experiment page: ablation table with measured metrics vs ground truth (1:15). 9. Export report (0:30). Keep a pre-recorded backup and a cached result set.
+
+## 61. Research Experiment Plan
+
+- **E1 Geometry validation (synthetic):** known speeds, vary camera height, angle, distance, noise; verify recovery and error scaling.
+- **E2 Detector ablation:** detector × resolution, effect on speed error and runtime.
+- **E3 Tracker ablation:** ByteTrack / OC-SORT / SORT, effect on track fragmentation and speed error.
+- **E4 Anchor point ablation:** box-center vs bottom-center vs other anchors.
+- **E5 Smoothing/window ablation:** two-point vs regression vs Kalman.
+- **E6 Calibration perturbation:** jitter reference points, measure error growth, validate interval coverage.
+- **E7 Real-data validation:** BrnoCompSpeed if obtained, plus self-recorded clips.
+- **E8 Performance:** FPS and stage time on stated CPU hardware.
+Fix seeds, repeat where stochastic, report means and spreads.
+
+## 62. Final Paper Plan
+
+Abstract; Introduction (problem, gap); Related work (from verified table); System overview (brief); Method (calibration, speed, uncertainty); Experimental setup (datasets, metrics, hardware); Results (E1–E8 tables from the DB export); Analysis (error attribution, failure cases); Limitations; Conclusion; Reproducibility appendix. Target a student conference or workshop; venue selection **RV**.
+
+## 63. Final PPT Plan
+
+~15 slides: problem, why it's hard, gap, contribution, pipeline, calibration and math, system, demo screenshots, experiment design, results, error analysis, limitations, future work, conclusion. The proposal PPT is the first 8 of these with plans instead of results.
+
+---
+
+## 64. Recommended First Milestone
+
+**"Truth-first vertical slice" (weeks 1–3):** one 60–90 second clip → detect → track → homography from four points → speed per track → CSV, compared against a *known* ground truth (synthetic or measured). No UI, no database. This proves the approach and exposes the ground-truth problem early, which is the biggest project risk.
+
+## 65. Exact Next Actions
+
+1. **This week:** decide team size and roles, and confirm the deadline calendar (tell me the semester length and I'll re-time section 57).
+2. **Verify** in this order: (a) BrnoCompSpeed access route, license and size; (b) UA-DETRAC availability; (c) AI City data terms; (d) every paper's venue and DOI in section 11; (e) licenses for your chosen detector and tracker.
+3. **Run a literature search** for "monocular vehicle speed estimation uncertainty" and "camera calibration error propagation speed" to test the novelty of the gap (section 18).
+4. **Check your hardware:** CPU model, RAM, whether any GPU exists. Everything in the performance plan depends on this.
+5. **Create the repo and CI** with the folder structure in section 36 (Phase 1).
+6. **Record or gather** 2–3 test clips (fixed camera, known road markings) and start a synthetic scene in Blender.
+7. **Send me:** your hardware specs, deadlines, team size, and whether you can get BrnoCompSpeed. I'll then produce the Phase 0 deliverables (verified literature table, requirements doc, dataset decision) and we proceed to Phase 1.
+
+**PHASE STATUS (Blueprint):**
+Architecture: PASS (proposed, pending your review)
+Implementation: N/A (no code, per your instruction)
+Tests: N/A
+Known issues: no live verification done; ground-truth availability unresolved; team and timeline unknown
+Technical debt: none yet
+Next phase: Phase 0, verification and requirements freeze

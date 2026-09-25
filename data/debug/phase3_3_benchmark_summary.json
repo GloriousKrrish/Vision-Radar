@@ -1,0 +1,51 @@
+{
+  "dataset_metadata": {
+    "dataset_name": "Synthetic Highway Controlled Speed Benchmark",
+    "source": "SYNTHETIC_HIGHWAY_CONTROLLED_V1",
+    "license": "CC-BY-4.0 (Synthetic Benchmark)",
+    "video_ids": [
+      "synthetic_highway.mp4"
+    ],
+    "ground_truth_format": "Mathematically exact trajectory equations",
+    "units": "meters, meters/second, km/h",
+    "coordinate_system": "Metric Road-Plane (X: lane meters, Y: distance meters)",
+    "annotation_methodology": "Synthetic trajectory generator with constant velocity equations",
+    "number_of_vehicles": 5,
+    "number_of_usable_samples": 1131
+  },
+  "video_hash": "a4c3ee6aeca7f5085cc49408d572e3e3df7cab65ead15701996724827ef99c10",
+  "model_hash": "c789161ed43c8269fcd4e67c67eeeb4e80c622da2eb296a20bc6007bd18a0b7d",
+  "reproducible": true,
+  "reproducibility_diffs": [],
+  "pass_A_time_sec": 59.95,
+  "pass_B_time_sec": 67.11,
+  "metrics": {
+    "vehicles_evaluated": 0,
+    "valid_samples": 0,
+    "rejected_samples": 31,
+    "mae_kmh": 0.0,
+    "rmse_kmh": 0.0,
+    "median_ae_kmh": 0.0,
+    "p95_ae_kmh": 0.0,
+    "mape_percent": 0.0,
+    "bias_kmh": 0.0,
+    "r2_score": 0.0,
+    "std_dev_kmh": 0.0
+  },
+  "uncertainty_coverage": {
+    "coverage_1sigma_pct": 0.0,
+    "coverage_2sigma_pct": 0.0,
+    "coverage_3sigma_pct": 0.0,
+    "calibration_error": 0.0
+  },
+  "chart_artifacts": {
+    "estimated_vs_ground_truth_speed": "data/reports/artifacts\\estimated_vs_ground_truth_speed.png",
+    "speed_error_histogram": "data/reports/artifacts\\speed_error_histogram.png",
+    "absolute_error_vs_speed": "data/reports/artifacts\\absolute_error_vs_speed.png",
+    "uncertainty_vs_absolute_error": "data/reports/artifacts\\uncertainty_vs_absolute_error.png",
+    "calibration_sensitivity": "data/reports/artifacts\\calibration_sensitivity.png",
+    "smoothing_ablation": "data/reports/artifacts\\smoothing_ablation.png",
+    "observation_window_accuracy": "data/reports/artifacts\\observation_window_accuracy.png",
+    "representative_vehicle_speed_comparison": "data/reports/artifacts\\representative_vehicle_speed_comparison.png"
+  }
+}

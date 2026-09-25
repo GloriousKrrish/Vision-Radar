@@ -1,0 +1,388 @@
+{
+  "total_unique_tracks": 27,
+  "total_class_flips": 0,
+  "total_fragmentation_events": 0,
+  "total_gap_frames_sum": 0,
+  "tracker_reported_id_switches": 0,
+  "tracker_reported_fragmentations": 61,
+  "tracks": [
+    {
+      "track_id": 1,
+      "first_frame": 0,
+      "last_frame": 96,
+      "track_duration_frames": 97,
+      "detection_count": 97,
+      "fragmentation_count": 0,
+      "largest_gap_frames": 0,
+      "total_gap_frames": 0,
+      "class_flip_count": 0,
+      "class_distribution": {
+        "Car": 97
+      }
+    },
+    {
+      "track_id": 2,
+      "first_frame": 0,
+      "last_frame": 94,
+      "track_duration_frames": 95,
+      "detection_count": 95,
+      "fragmentation_count": 0,
+      "largest_gap_frames": 0,
+      "total_gap_frames": 0,
+      "class_flip_count": 0,
+      "class_distribution": {
+        "Car": 95
+      }
+    },
+    {
+      "track_id": 3,
+      "first_frame": 0,
+      "last_frame": 40,
+      "track_duration_frames": 41,
+      "detection_count": 41,
+      "fragmentation_count": 0,
+      "largest_gap_frames": 0,
+      "total_gap_frames": 0,
+      "class_flip_count": 0,
+      "class_distribution": {
+        "Car": 41
+      }
+    },
+    {
+      "track_id": 4,
+      "first_frame": 0,
+      "last_frame": 47,
+      "track_duration_frames": 48,
+      "detection_count": 48,
+      "fragmentation_count": 0,
+      "largest_gap_frames": 0,
+      "total_gap_frames": 0,
+      "class_flip_count": 0,
+      "class_distribution": {
+        "Car": 48
+      }
+    },
+    {
+      "track_id": 5,
+      "first_frame": 2,
+      "last_frame": 137,
+      "track_duration_frames": 136,
+      "detection_count": 136,
+      "fragmentation_count": 0,
+      "largest_gap_frames": 0,
+      "total_gap_frames": 0,
+      "class_flip_count": 0,
+      "class_distribution": {
+        "Car": 136
+      }
+    },
+    {
+      "track_id": 6,
+      "first_frame": 29,
+      "last_frame": 166,
+      "track_duration_frames": 138,
+      "detection_count": 138,
+      "fragmentation_count": 0,
+      "largest_gap_frames": 0,
+      "total_gap_frames": 0,
+      "class_flip_count": 0,
+      "class_distribution": {
+        "Car": 138
+      }
+    },
+    {
+      "track_id": 7,
+      "first_frame": 41,
+      "last_frame": 167,
+      "track_duration_frames": 127,
+      "detection_count": 127,
+      "fragmentation_count": 0,
+      "largest_gap_frames": 0,
+      "total_gap_frames": 0,
+      "class_flip_count": 0,
+      "class_distribution": {
+        "Car": 127
+      }
+    },
+    {
+      "track_id": 8,
+      "first_frame": 68,
+      "last_frame": 179,
+      "track_duration_frames": 112,
+      "detection_count": 112,
+      "fragmentation_count": 0,
+      "largest_gap_frames": 0,
+      "total_gap_frames": 0,
+      "class_flip_count": 0,
+      "class_distribution": {
+        "Car": 112
+      }
+    },
+    {
+      "track_id": 9,
+      "first_frame": 89,
+      "last_frame": 265,
+      "track_duration_frames": 177,
+      "detection_count": 177,
+      "fragmentation_count": 0,
+      "largest_gap_frames": 0,
+      "total_gap_frames": 0,
+      "class_flip_count": 0,
+      "class_distribution": {
+        "Car": 177
+      }
+    },
+    {
+      "track_id": 10,
+      "first_frame": 102,
+      "last_frame": 161,
+      "track_duration_frames": 60,
+      "detection_count": 60,
+      "fragmentation_count": 0,
+      "largest_gap_frames": 0,
+      "total_gap_frames": 0,
+      "class_flip_count": 0,
+      "class_distribution": {
+        "Car": 60
+      }
+    },
+    {
+      "track_id": 11,
+      "first_frame": 109,
+      "last_frame": 151,
+      "track_duration_frames": 43,
+      "detection_count": 43,
+      "fragmentation_count": 0,
+      "largest_gap_frames": 0,
+      "total_gap_frames": 0,
+      "class_flip_count": 0,
+      "class_distribution": {
+        "Car": 43
+      }
+    },
+    {
+      "track_id": 12,
+      "first_frame": 163,
+      "last_frame": 282,
+      "track_duration_frames": 120,
+      "detection_count": 120,
+      "fragmentation_count": 0,
+      "largest_gap_frames": 0,
+      "total_gap_frames": 0,
+      "class_flip_count": 0,
+      "class_distribution": {
+        "Car": 120
+      }
+    },
+    {
+      "track_id": 13,
+      "first_frame": 163,
+      "last_frame": 273,
+      "track_duration_frames": 111,
+      "detection_count": 111,
+      "fragmentation_count": 0,
+      "largest_gap_frames": 0,
+      "total_gap_frames": 0,
+      "class_flip_count": 0,
+      "class_distribution": {
+        "Car": 111
+      }
+    },
+    {
+      "track_id": 14,
+      "first_frame": 174,
+      "last_frame": 284,
+      "track_duration_frames": 111,
+      "detection_count": 111,
+      "fragmentation_count": 0,
+      "largest_gap_frames": 0,
+      "total_gap_frames": 0,
+      "class_flip_count": 0,
+      "class_distribution": {
+        "Car": 111
+      }
+    },
+    {
+      "track_id": 15,
+      "first_frame": 177,
+      "last_frame": 289,
+      "track_duration_frames": 113,
+      "detection_count": 113,
+      "fragmentation_count": 0,
+      "largest_gap_frames": 0,
+      "total_gap_frames": 0,
+      "class_flip_count": 0,
+      "class_distribution": {
+        "Car": 113
+      }
+    },
+    {
+      "track_id": 16,
+      "first_frame": 189,
+      "last_frame": 220,
+      "track_duration_frames": 32,
+      "detection_count": 32,
+      "fragmentation_count": 0,
+      "largest_gap_frames": 0,
+      "total_gap_frames": 0,
+      "class_flip_count": 0,
+      "class_distribution": {
+        "Car": 32
+      }
+    },
+    {
+      "track_id": 17,
+      "first_frame": 194,
+      "last_frame": 331,
+      "track_duration_frames": 138,
+      "detection_count": 138,
+      "fragmentation_count": 0,
+      "largest_gap_frames": 0,
+      "total_gap_frames": 0,
+      "class_flip_count": 0,
+      "class_distribution": {
+        "Car": 138
+      }
+    },
+    {
+      "track_id": 18,
+      "first_frame": 217,
+      "last_frame": 314,
+      "track_duration_frames": 98,
+      "detection_count": 98,
+      "fragmentation_count": 0,
+      "largest_gap_frames": 0,
+      "total_gap_frames": 0,
+      "class_flip_count": 0,
+      "class_distribution": {
+        "Car": 98
+      }
+    },
+    {
+      "track_id": 19,
+      "first_frame": 226,
+      "last_frame": 334,
+      "track_duration_frames": 109,
+      "detection_count": 109,
+      "fragmentation_count": 0,
+      "largest_gap_frames": 0,
+      "total_gap_frames": 0,
+      "class_flip_count": 0,
+      "class_distribution": {
+        "Car": 109
+      }
+    },
+    {
+      "track_id": 20,
+      "first_frame": 244,
+      "last_frame": 334,
+      "track_duration_frames": 91,
+      "detection_count": 91,
+      "fragmentation_count": 0,
+      "largest_gap_frames": 0,
+      "total_gap_frames": 0,
+      "class_flip_count": 0,
+      "class_distribution": {
+        "Car": 91
+      }
+    },
+    {
+      "track_id": 21,
+      "first_frame": 244,
+      "last_frame": 334,
+      "track_duration_frames": 91,
+      "detection_count": 91,
+      "fragmentation_count": 0,
+      "largest_gap_frames": 0,
+      "total_gap_frames": 0,
+      "class_flip_count": 0,
+      "class_distribution": {
+        "Car": 91
+      }
+    },
+    {
+      "track_id": 22,
+      "first_frame": 265,
+      "last_frame": 334,
+      "track_duration_frames": 70,
+      "detection_count": 70,
+      "fragmentation_count": 0,
+      "largest_gap_frames": 0,
+      "total_gap_frames": 0,
+      "class_flip_count": 0,
+      "class_distribution": {
+        "Car": 70
+      }
+    },
+    {
+      "track_id": 23,
+      "first_frame": 270,
+      "last_frame": 300,
+      "track_duration_frames": 31,
+      "detection_count": 31,
+      "fragmentation_count": 0,
+      "largest_gap_frames": 0,
+      "total_gap_frames": 0,
+      "class_flip_count": 0,
+      "class_distribution": {
+        "Car": 31
+      }
+    },
+    {
+      "track_id": 24,
+      "first_frame": 284,
+      "last_frame": 334,
+      "track_duration_frames": 51,
+      "detection_count": 51,
+      "fragmentation_count": 0,
+      "largest_gap_frames": 0,
+      "total_gap_frames": 0,
+      "class_flip_count": 0,
+      "class_distribution": {
+        "Car": 51
+      }
+    },
+    {
+      "track_id": 25,
+      "first_frame": 306,
+      "last_frame": 334,
+      "track_duration_frames": 29,
+      "detection_count": 29,
+      "fragmentation_count": 0,
+      "largest_gap_frames": 0,
+      "total_gap_frames": 0,
+      "class_flip_count": 0,
+      "class_distribution": {
+        "Car": 29
+      }
+    },
+    {
+      "track_id": 26,
+      "first_frame": 315,
+      "last_frame": 334,
+      "track_duration_frames": 20,
+      "detection_count": 20,
+      "fragmentation_count": 0,
+      "largest_gap_frames": 0,
+      "total_gap_frames": 0,
+      "class_flip_count": 0,
+      "class_distribution": {
+        "Car": 20
+      }
+    },
+    {
+      "track_id": 27,
+      "first_frame": 320,
+      "last_frame": 334,
+      "track_duration_frames": 15,
+      "detection_count": 15,
+      "fragmentation_count": 0,
+      "largest_gap_frames": 0,
+      "total_gap_frames": 0,
+      "class_flip_count": 0,
+      "class_distribution": {
+        "Car": 15
+      }
+    }
+  ]
+}
