@@ -31,6 +31,8 @@ from apps.api.schemas import (
     ViolationResponse, ViolationReviewUpdate
 )
 
+from apps.api.routes_stream import router as stream_router
+
 # Initialize Database tables
 create_tables()
 
@@ -39,6 +41,8 @@ app = FastAPI(
     version="0.1.0",
     description="Error-Decomposed and Uncertainty-Aware Monocular Vehicle Speed Estimation Platform"
 )
+
+app.include_router(stream_router)
 
 # Enable CORS for Frontend SPA
 app.add_middleware(

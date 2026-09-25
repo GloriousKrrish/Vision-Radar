@@ -202,15 +202,84 @@ export const WorkbenchView: React.FC = () => {
     frameMapRef.current = map;
   }, [realTracks]);
 
-  // =========================================================================
+  const lastRenderedFrameIdRef = useRef<number>(-1);
+  const [serverPipelineLatencyMs, setServerPipelineLatencyMs] = useState<number | null>(null);
+  const [perceptionMetrics, setPerceptionMetrics] = useState<any | null>(null);
+
+  const loadJobResults = useCallback(async (jobId: number) => {
+    try {
+      const [trkRes, violsRes, jobRes] = await Promise.all([
+        fetch(`/api/v1/jobs/${jobId}/tracks`),
+        fetch(`/api/v1/violations`),
+        fetch(`/api/v1/jobs/${jobId}`)
+      ]);
+
+      const trkData = trkRes.ok ? await trkRes.json() : [];
+      const violsData = violsRes.ok ? await violsRes.json() : [];
+      const jobData = jobRes.ok ? await jobRes.json() : null;
+
+      if (trkData?.length) {
+        setRealTracks(trkData);
+        rtFrameBufferRef.current.clear();
+      }
+      if (violsData?.length) {
+        setViolations(violsData.map((v: any) => ({
+          t: v.timestamp, id: v.track_id, v: v.estimated_speed_kmh, loc: v.location_label
+        })));
+      }
+      if (jobData?.telemetry) {
+        setTelemetry(jobData.telemetry);
+        if (jobData.telemetry.average_fps) setProcessingFps(jobData.telemetry.average_fps);
+        if (jobData.telemetry.real_time_factor) setRealTimeFactor(jobData.telemetry.real_time_factor);
+      }
+      setPipelineStage('COMPLETED');
+      setJobStatusText(`Job #${jobId} COMPLETED — REAL VIDEO · LIVE AI ANALYSIS`);
+    } catch (err) {
+      console.error('Failed to load job results:', err);
+    }
+  }, []);
+
+  // REST Polling Fallback to guarantee job state synchronization if WebSocket disconnects or finishes fast
+  useEffect(() => {
+    if (!activeJobId || pipelineStage === 'COMPLETED' || pipelineStage === 'ERROR' || pipelineStage === 'IDLE') {
+      return;
+    }
+
+    const pollInterval = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/v1/jobs/${activeJobId}`);
+        if (!res.ok) return;
+        const job = await res.json();
+        if (job.status === 'SUCCEEDED') {
+          isLiveStreamingRef.current = false;
+          loadJobResults(activeJobId);
+        } else if (job.status === 'FAILED') {
+          isLiveStreamingRef.current = false;
+          setPipelineStage('ERROR');
+          setJobStatusText(`Error on Job #${activeJobId}: ${job.error_message || 'Job processing failed'}`);
+        } else if (job.progress_pct > 0) {
+          setJobProgress(job.progress_pct);
+          if (pipelineStage === 'JOB_CREATED' || pipelineStage === 'UPLOADING') {
+            setPipelineStage('PROCESSING');
+            setJobStatusText(`Job #${activeJobId} in progress (${Math.round(job.progress_pct)}%)...`);
+          }
+        }
+      } catch (e) {
+        console.error('Job polling error:', e);
+      }
+    }, 1500);
+
+    return () => clearInterval(pollInterval);
+  }, [activeJobId, pipelineStage, loadJobResults]);
+
   // Authoritative WebSocket Connection
-  // =========================================================================
   const connectWebSocket = useCallback((jobId: number) => {
     if (wsRef.current) {
       wsRef.current.close();
       wsRef.current = null;
     }
 
+    lastRenderedFrameIdRef.current = -1;
     const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
     const wsUrl = `${proto}://${window.location.host}/api/v1/jobs/${jobId}/stream`;
     const ws = new WebSocket(wsUrl);
@@ -227,14 +296,32 @@ export const WorkbenchView: React.FC = () => {
       let msg: any;
       try { msg = JSON.parse(event.data); } catch { return; }
 
-      if (msg.type === 'frame_result') {
-        const frameIdx: number = msg.frame_index;
-        const tracks: any[] = msg.tracks || [];
+      const payload = msg.payload || msg;
+      const type = msg.type;
+
+      if (type === 'frame_result') {
+        const frameIdx: number = payload.frame_id ?? payload.frame_index ?? -1;
+
+        if (frameIdx >= 0 && frameIdx <= lastRenderedFrameIdRef.current) {
+          return;
+        }
+        if (frameIdx >= 0) {
+          lastRenderedFrameIdRef.current = frameIdx;
+        }
+
         setLatestInferenceFrame(frameIdx);
 
-        // Map backend track format to canvas render format
+        if (payload.capture_ts && payload.result_ts) {
+          const latencyMs = Math.round((payload.result_ts - payload.capture_ts) * 1000);
+          setServerPipelineLatencyMs(latencyMs);
+        } else if (payload.server_pipeline_latency_ms !== undefined) {
+          setServerPipelineLatencyMs(Math.round(payload.server_pipeline_latency_ms));
+        }
+
+        const tracks: any[] = payload.tracks || [];
+
         const renderTracks = tracks.map((t: any) => {
-          const bbox = t.bbox || [0, 0, 0, 0];
+          const bbox = t.bbox ? (t.bbox.x1 !== undefined ? [t.bbox.x1, t.bbox.y1, t.bbox.x2, t.bbox.y2] : t.bbox) : [0, 0, 0, 0];
           let [x1, y1, x2, y2] = bbox;
           const rw = x2 > x1 ? x2 - x1 : x2;
           const rh = y2 > y1 ? y2 - y1 : y2;
@@ -250,7 +337,6 @@ export const WorkbenchView: React.FC = () => {
           };
         });
 
-        // Insert into bounded real-time buffer
         const buf = rtFrameBufferRef.current;
         buf.set(frameIdx, renderTracks);
 
@@ -271,7 +357,9 @@ export const WorkbenchView: React.FC = () => {
           setFirstBoxMs(Math.round(latencyMs));
         }
 
-      } else if (msg.type === 'status') {
+      } else if (type === 'perception_metrics') {
+        setPerceptionMetrics(payload);
+      } else if (type === 'stream_status' || type === 'status' || msg.type === 'status') {
         const progress = msg.progress || 0;
         setJobProgress(progress);
         const stage = msg.stage || '';
@@ -304,24 +392,7 @@ export const WorkbenchView: React.FC = () => {
 
         const jId = msg.job_id || activeJobIdRef.current;
         if (jId) {
-          Promise.all([
-            fetch(`/api/v1/jobs/${jId}/tracks`).then(r => r.json()),
-            fetch(`/api/v1/violations`).then(r => r.json()),
-            fetch(`/api/v1/jobs/${jId}`).then(r => r.json()),
-          ]).then(([trkData, violsData, jobData]) => {
-            if (trkData?.length) {
-              setRealTracks(trkData);
-              rtFrameBufferRef.current.clear();
-            }
-            if (violsData?.length) {
-              setViolations(violsData.map((v: any) => ({
-                t: v.timestamp, id: v.track_id, v: v.estimated_speed_kmh, loc: v.location_label
-              })));
-            }
-            if (jobData?.telemetry) setTelemetry(jobData.telemetry);
-            setPipelineStage('COMPLETED');
-            setJobStatusText(`Job #${jId} COMPLETED — REAL VIDEO · LIVE AI ANALYSIS`);
-          }).catch(console.error);
+          loadJobResults(jId);
         }
 
       } else if (msg.type === 'error') {
@@ -334,14 +405,21 @@ export const WorkbenchView: React.FC = () => {
 
     ws.onerror = () => {
       setWsConnected(false);
-      setJobStatusText(`WebSocket error on Job #${jobId} — check backend connection`);
+      // Immediately check REST API for job completion
+      fetch(`/api/v1/jobs/${jobId}`).then(r => r.json()).then(j => {
+        if (j.status === 'SUCCEEDED') loadJobResults(jobId);
+      }).catch(() => {});
     };
 
     ws.onclose = () => {
       setWsConnected(false);
       isLiveStreamingRef.current = false;
+      // Check REST API for job completion on WebSocket close
+      fetch(`/api/v1/jobs/${jobId}`).then(r => r.json()).then(j => {
+        if (j.status === 'SUCCEEDED') loadJobResults(jobId);
+      }).catch(() => {});
     };
-  }, []);
+  }, [loadJobResults]);
 
   useEffect(() => {
     return () => {
@@ -842,6 +920,9 @@ export const WorkbenchView: React.FC = () => {
             )}
             {latestInferenceFrame !== null && (
               <span>Inference Frame: <b style={{ color: '#10B981' }}>{latestInferenceFrame}</b></span>
+            )}
+            {serverPipelineLatencyMs !== null && (
+              <span>Server Pipeline Latency: <b style={{ color: serverPipelineLatencyMs <= 100 ? '#10B981' : '#F59E0B' }}>{serverPipelineLatencyMs} ms</b></span>
             )}
             {firstBoxMs && <span>🎯 First box: <b style={{ color: '#10B981' }}>{firstBoxMs} ms</b></span>}
             {firstDetectionMs && <span>⚡ First detection: <b style={{ color: '#4F46E5' }}>{firstDetectionMs} ms</b></span>}
