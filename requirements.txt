@@ -1,0 +1,12 @@
+numpy
+opencv-python-headless
+scipy
+pandas
+fastapi
+uvicorn
+sqlalchemy
+pydantic
+pydantic-settings
+reportlab
+requests
+python-multipart

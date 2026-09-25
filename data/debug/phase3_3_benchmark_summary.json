@@ -17,8 +17,8 @@
   "model_hash": "c789161ed43c8269fcd4e67c67eeeb4e80c622da2eb296a20bc6007bd18a0b7d",
   "reproducible": true,
   "reproducibility_diffs": [],
-  "pass_A_time_sec": 59.95,
-  "pass_B_time_sec": 67.11,
+  "pass_A_time_sec": 83.05,
+  "pass_B_time_sec": 84.01,
   "metrics": {
     "vehicles_evaluated": 0,
     "valid_samples": 0,

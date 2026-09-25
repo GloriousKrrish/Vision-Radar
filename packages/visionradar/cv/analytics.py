@@ -19,17 +19,21 @@ class TrafficAnalyticsEngine:
                 "speed_histogram": {"bins": [], "counts": []}
             }
 
-        speeds = [r["smoothed_kmh"] for r in speed_records if "smoothed_kmh" in r]
+        speeds = [r["smoothed_kmh"] for r in speed_records if r.get("smoothed_kmh") is not None and r["smoothed_kmh"] > 0]
         classes = [r.get("vehicle_class", "Car") for r in speed_records]
 
         if not speeds:
-            speeds = [0.0]
-
-        arr = np.array(speeds, dtype=np.float64)
-        mean_v = float(np.mean(arr))
-        median_v = float(np.median(arr))
-        p85_v = float(np.percentile(arr, 85))
-        max_v = float(np.max(arr))
+            arr = np.array([0.0], dtype=np.float64)
+            mean_v = 0.0
+            median_v = 0.0
+            p85_v = 0.0
+            max_v = 0.0
+        else:
+            arr = np.array(speeds, dtype=np.float64)
+            mean_v = float(np.mean(arr))
+            median_v = float(np.median(arr))
+            p85_v = float(np.percentile(arr, 85))
+            max_v = float(np.max(arr))
 
         # Class counts
         class_counts = {}

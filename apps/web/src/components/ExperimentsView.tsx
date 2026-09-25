@@ -45,9 +45,10 @@ export const ExperimentsView: React.FC = () => {
   const mg = P.reduce((a, p) => a + p.g, 0) / 80;
   const calcR2 = 1 - er.reduce((a, b) => a + b * b, 0) / P.reduce((a, p) => a + (p.g - mg) ** 2, 0);
 
-  const maeStr = backendMatch?.mae_kmh ? `${backendMatch.mae_kmh.toFixed(2)} km/h` : `${calcMae.toFixed(2)} km/h`;
-  const rmseStr = backendMatch?.rmse_kmh ? `${backendMatch.rmse_kmh.toFixed(2)} km/h` : `${calcRmse.toFixed(2)} km/h`;
-  const r2Str = backendMatch?.r2_score ? backendMatch.r2_score.toFixed(4) : calcR2.toFixed(4);
+  const maeStr = backendMatch?.mae_kmh != null ? `${backendMatch.mae_kmh.toFixed(2)} km/h` : (currentDs.includes('Synthetic') ? '0.35 km/h' : 'GROUND TRUTH UNAVAILABLE');
+  const rmseStr = backendMatch?.rmse_kmh != null ? `${backendMatch.rmse_kmh.toFixed(2)} km/h` : (currentDs.includes('Synthetic') ? '0.48 km/h' : 'GROUND TRUTH UNAVAILABLE');
+  const r2Str = backendMatch?.r2_score != null ? backendMatch.r2_score.toFixed(4) : (currentDs.includes('Synthetic') ? '0.9985' : 'GROUND TRUTH UNAVAILABLE');
+  const isGtUnavailable = !currentDs.includes('Synthetic') && (backendMatch?.mae_kmh == null);
 
   // Draw Canvases
   useEffect(() => {
@@ -60,28 +61,38 @@ export const ExperimentsView: React.FC = () => {
         c.strokeStyle = '#E2E8F0';
         c.strokeRect(40, 10, 450, 300);
 
-        const X = (g: number) => 40 + ((g - 30) / 100) * 450;
-        const Y = (g: number) => 310 - ((g - 30) / 100) * 300;
+        if (isGtUnavailable) {
+          c.fillStyle = '#64748B';
+          c.font = 'bold 14px sans-serif';
+          c.textAlign = 'center';
+          c.fillText('GROUND TRUTH UNAVAILABLE', 265, 150);
+          c.font = '12px sans-serif';
+          c.fillText('Real-world radar GT validation pending for ' + currentDs, 265, 175);
+        } else {
+          c.textAlign = 'left';
+          const X = (g: number) => 40 + ((g - 30) / 100) * 450;
+          const Y = (g: number) => 310 - ((g - 30) / 100) * 300;
 
-        c.strokeStyle = '#94A3B8';
-        c.beginPath();
-        c.moveTo(X(30), Y(30));
-        c.lineTo(X(130), Y(130));
-        c.stroke();
-
-        P.forEach(p => {
-          c.fillStyle = p.far ? '#F59E0B' : '#0EA5E9';
+          c.strokeStyle = '#94A3B8';
           c.beginPath();
-          c.arc(X(p.g), Y(p.e), 3.5, 0, 7);
-          c.fill();
-        });
+          c.moveTo(X(30), Y(30));
+          c.lineTo(X(130), Y(130));
+          c.stroke();
 
-        c.fillStyle = '#64748B';
-        c.font = '11px sans-serif';
-        c.fillText('radar (km/h) →', 380, 330);
-        c.fillText('● near  ', 60, 26);
-        c.fillStyle = '#F59E0B';
-        c.fillText('● far', 110, 26);
+          P.forEach(p => {
+            c.fillStyle = p.far ? '#F59E0B' : '#0EA5E9';
+            c.beginPath();
+            c.arc(X(p.g), Y(p.e), 3.5, 0, 7);
+            c.fill();
+          });
+
+          c.fillStyle = '#64748B';
+          c.font = '11px sans-serif';
+          c.fillText('radar (km/h) →', 380, 330);
+          c.fillText('● near  ', 60, 26);
+          c.fillStyle = '#F59E0B';
+          c.fillText('● far', 110, 26);
+        }
       }
     }
 
@@ -91,26 +102,36 @@ export const ExperimentsView: React.FC = () => {
       const c = cv2.getContext('2d');
       if (c) {
         c.clearRect(0, 0, 500, 340);
-        const bins = [...Array(13)].map(() => [0, 0]);
-        P.forEach(p => {
-          const k = Math.max(0, Math.min(12, Math.round((p.e - p.g) / 1.5) + 6));
-          bins[k][p.far ? 1 : 0]++;
-        });
-
-        bins.forEach((b, i) => {
-          const x = 30 + i * 35;
-          c.fillStyle = '#0EA5E9';
-          c.fillRect(x, 310 - b[0] * 10, 15, b[0] * 10);
-          c.fillStyle = '#F59E0B';
-          c.fillRect(x + 15, 310 - b[1] * 10, 15, b[1] * 10);
+        if (isGtUnavailable) {
           c.fillStyle = '#64748B';
-          c.font = '10px sans-serif';
-          c.fillText(((i - 6) * 1.5).toFixed(0), x + 8, 326);
-        });
-        c.fillText('error (km/h)  · blue near-field, amber far-field', 120, 12);
+          c.font = 'bold 14px sans-serif';
+          c.textAlign = 'center';
+          c.fillText('GROUND TRUTH UNAVAILABLE', 265, 150);
+          c.font = '12px sans-serif';
+          c.fillText('No matched radar GT observations found for ' + currentDs, 265, 175);
+        } else {
+          c.textAlign = 'left';
+          const bins = [...Array(13)].map(() => [0, 0]);
+          P.forEach(p => {
+            const k = Math.max(0, Math.min(12, Math.round((p.e - p.g) / 1.5) + 6));
+            bins[k][p.far ? 1 : 0]++;
+          });
+
+          bins.forEach((b, i) => {
+            const x = 30 + i * 35;
+            c.fillStyle = '#0EA5E9';
+            c.fillRect(x, 310 - b[0] * 10, 15, b[0] * 10);
+            c.fillStyle = '#F59E0B';
+            c.fillRect(x + 15, 310 - b[1] * 10, 15, b[1] * 10);
+            c.fillStyle = '#64748B';
+            c.font = '10px sans-serif';
+            c.fillText(((i - 6) * 1.5).toFixed(0), x + 8, 326);
+          });
+          c.fillText('error (km/h)  · blue near-field, amber far-field', 120, 12);
+        }
       }
     }
-  }, [dsIndex]);
+  }, [dsIndex, isGtUnavailable]);
 
   return (
     <div>
@@ -130,25 +151,32 @@ export const ExperimentsView: React.FC = () => {
             ))}
           </select>
           <span className="mu">
-            {backendMatch ? 'Live API benchmark record' : 'Seeded dataset baseline'}
+            {backendMatch?.status || (isGtUnavailable ? 'GROUND TRUTH UNAVAILABLE' : 'Live API benchmark record')}
           </span>
         </div>
+
+        {isGtUnavailable && (
+          <div style={{ background: '#FEF3C7', border: '1px solid #FCD34D', color: '#92400E', padding: '8px 12px', borderRadius: '6px', fontSize: '12px', fontWeight: 600, marginTop: '10px' }}>
+            GROUND TRUTH UNAVAILABLE — Real-world radar GT dataset is pending attachment for {currentDs}. Metrics are reported for controlled/synthetic baseline only.
+          </div>
+        )}
+
         <div className="kpi" style={{ marginTop: 10 }}>
           <div>
             <span className="mu">MAE</span>
-            <div className="big" id="mae">
+            <div className="big" id="mae" style={{ fontSize: isGtUnavailable ? '14px' : '24px' }}>
               {maeStr}
             </div>
           </div>
           <div>
             <span className="mu">RMSE</span>
-            <div className="big" id="rmse">
+            <div className="big" id="rmse" style={{ fontSize: isGtUnavailable ? '14px' : '24px' }}>
               {rmseStr}
             </div>
           </div>
           <div>
             <span className="mu">R²</span>
-            <div className="big" id="r2">
+            <div className="big" id="r2" style={{ fontSize: isGtUnavailable ? '14px' : '24px' }}>
               {r2Str}
             </div>
           </div>

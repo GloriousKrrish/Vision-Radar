@@ -345,13 +345,23 @@ class SpeedBenchmarkEngine:
         for w_sec in windows_sec:
             windowed_tracks = copy.deepcopy(estimated_tracks)
             for trk in windowed_tracks:
-                pts = trk.get("trajectory", {}).get("points", [])
-                if pts:
-                    t_end = pts[-1].get("timestamp", 0.0)
-                    filtered_pts = [p for p in pts if (t_end - p.get("timestamp", 0.0)) <= w_sec]
-                    trk["trajectory"]["points"] = filtered_pts
-                    if len(filtered_pts) < 3 and "speed_kmh" in trk:
-                        trk["speed_uncertainty_kmh"] = trk.get("speed_uncertainty_kmh", 4.0) * 1.5
+                traj = trk.get("trajectory")
+                if isinstance(traj, list):
+                    pts = traj
+                    if pts:
+                        t_end = pts[-1].get("timestamp", 0.0) if isinstance(pts[-1], dict) else 0.0
+                        filtered_pts = [p for p in pts if isinstance(p, dict) and (t_end - p.get("timestamp", 0.0)) <= w_sec]
+                        trk["trajectory"] = filtered_pts
+                        if len(filtered_pts) < 3 and "speed_kmh" in trk:
+                            trk["speed_uncertainty_kmh"] = trk.get("speed_uncertainty_kmh", 4.0) * 1.5
+                elif isinstance(traj, dict):
+                    pts = traj.get("points", [])
+                    if pts:
+                        t_end = pts[-1].get("timestamp", 0.0) if isinstance(pts[-1], dict) else 0.0
+                        filtered_pts = [p for p in pts if isinstance(p, dict) and (t_end - p.get("timestamp", 0.0)) <= w_sec]
+                        trk["trajectory"]["points"] = filtered_pts
+                        if len(filtered_pts) < 3 and "speed_kmh" in trk:
+                            trk["speed_uncertainty_kmh"] = trk.get("speed_uncertainty_kmh", 4.0) * 1.5
 
             metrics, comps, _, _ = self.evaluate_speed_accuracy(windowed_tracks, ground_truth_provider)
             mean_uncert = float(np.mean([c.uncertainty_kmh for c in comps])) if comps else 4.0

@@ -12,13 +12,15 @@ class TrajectoryPoint:
         bbox: Optional[Tuple[float, float, float, float]] = None,
         world_pos: Optional[Tuple[float, float]] = None,
         confidence: float = 1.0,
-        anchor_pixel: Optional[Tuple[float, float]] = None
+        anchor_pixel: Optional[Tuple[float, float]] = None,
+        roi_status: str = "VALID"
     ):
         self.frame_index = frame_index
         self.timestamp = timestamp
         self.bbox = bbox or (0.0, 0.0, 50.0, 50.0)
         self.confidence = confidence
         self.world_pos = world_pos
+        self.roi_status = roi_status
 
         if anchor_pixel is not None:
             self.anchor_pixel = anchor_pixel
@@ -33,6 +35,7 @@ class TrajectoryPoint:
             "bbox": list(self.bbox),
             "anchor_pixel": list(self.anchor_pixel),
             "world_pos": list(self.world_pos) if self.world_pos else None,
+            "roi_status": self.roi_status,
             "confidence": self.confidence
         }
 

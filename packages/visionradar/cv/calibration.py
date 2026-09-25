@@ -58,17 +58,105 @@ class HomographyCalibrator:
         H_inv = np.linalg.inv(H)
         return H, H_inv
 
-    def image_to_world(self, u: float, v: float) -> Tuple[float, float]:
+    def image_to_world(self, u: float, v: float, source_width: float = 1920.0, source_height: float = 1080.0) -> Tuple[float, float]:
         """
         Projects an image pixel point (u, v) onto the road plane (X, Y) in metric coordinates (meters).
+        Handles coordinate scaling if (u, v) is in 1920x1080 source space while image_points are in 800x450 canvas space.
         """
-        pt = np.array([u, v, 1.0], dtype=np.float64)
+        pts = np.array(self.image_points, dtype=np.float32) if self.image_points else np.array([])
+        max_x = np.max(pts[:, 0]) if len(pts) > 0 else 1000.0
+        
+        # Scale (u, v) ONLY if (u, v) are in 1920x1080 pixel space while image_points are in 800x450 space
+        if max_x <= 850.0 and (u > 850.0 or v > 450.0):
+            sw = max(1920.0, source_width)
+            sh = max(1080.0, source_height)
+            test_u = u * (800.0 / sw)
+            test_v = v * (450.0 / sh)
+        else:
+            test_u = u
+            test_v = v
+
+        pt = np.array([test_u, test_v, 1.0], dtype=np.float64)
         res = self.H @ pt
         if abs(res[2]) < 1e-9:
             return 0.0, 0.0
         X = res[0] / res[2]
         Y = res[1] / res[2]
         return float(X), float(Y)
+
+    def is_point_in_quadrilateral(
+        self,
+        u: float,
+        v: float,
+        source_width: float = 1920.0,
+        source_height: float = 1080.0
+    ) -> bool:
+        """
+        Tests whether pixel anchor (u, v) lies inside the calibrated road plane polygon.
+        Handles coordinate scaling if (u, v) is in source image space while image_points
+        are in 800x450 canvas space.
+        """
+        if len(self.image_points) < 4:
+            return True
+
+        pts = np.array(self.image_points, dtype=np.float32)
+        max_x = np.max(pts[:, 0])
+
+        if max_x <= 850.0 and (u > 850.0 or v > 450.0):
+            sw = max(1920.0, source_width)
+            sh = max(1080.0, source_height)
+            test_u = u * (800.0 / sw)
+            test_v = v * (450.0 / sh)
+        else:
+            test_u = u
+            test_v = v
+
+        res = cv2.pointPolygonTest(pts, (float(test_u), float(test_v)), False)
+        return res >= 0.0
+
+    def is_homography_stable(
+        self,
+        u: float,
+        v: float,
+        source_width: float = 1920.0,
+        source_height: float = 1080.0
+    ) -> Tuple[bool, str]:
+        """
+        Checks numerical homography projection stability at pixel point (u, v).
+        Tests denominator value and local spatial scale factor (m/px).
+        """
+        pts = np.array(self.image_points, dtype=np.float32) if self.image_points else np.array([])
+        max_x = np.max(pts[:, 0]) if len(pts) > 0 else 1000.0
+        
+        if max_x <= 850.0 and (u > 850.0 or v > 450.0):
+            sw = max(1920.0, source_width)
+            sh = max(1080.0, source_height)
+            test_u = u * (800.0 / sw)
+            test_v = v * (450.0 / sh)
+        else:
+            test_u = u
+            test_v = v
+
+        pt = np.array([test_u, test_v, 1.0], dtype=np.float64)
+        res = self.H @ pt
+        denom = float(res[2])
+
+        if abs(denom) < 0.05:
+            return False, "CALIBRATION_UNSTABLE"
+
+        pt_next = np.array([test_u, test_v + 1.0, 1.0], dtype=np.float64)
+        res_next = self.H @ pt_next
+        if abs(res_next[2]) < 1e-9:
+            return False, "CALIBRATION_UNSTABLE"
+
+        Y1 = res[1] / denom
+        Y2 = res_next[1] / res_next[2]
+        delta_y = abs(Y2 - Y1)
+
+        if delta_y > 5.0:
+            return False, "CALIBRATION_UNSTABLE"
+
+        return True, "VALID"
 
     def world_to_image(self, X: float, Y: float) -> Tuple[float, float]:
         """

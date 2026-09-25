@@ -69,19 +69,36 @@ class MonocularSpeedEstimator:
         self.window_size_frames = window_size_frames
         self.fps = fps
 
-    def project_trajectory(self, trajectory: VehicleTrajectory):
+    def project_trajectory(self, trajectory: VehicleTrajectory, source_width: float = 1920.0, source_height: float = 1080.0):
         """
         Projects all trajectory anchor pixel points onto the calibrated road plane.
+        Enforces ROI polygon membership and homography numerical stability.
         """
         for pt in trajectory.points:
             u, v = pt.anchor_pixel
-            pt.world_pos = self.calibrator.image_to_world(u, v)
+            in_roi = self.calibrator.is_point_in_quadrilateral(u, v, source_width, source_height)
+            if not in_roi:
+                pt.roi_status = "OUT_OF_ROI"
+                pt.world_pos = None
+                continue
+
+            is_stable, reason = self.calibrator.is_homography_stable(u, v, source_width, source_height)
+            if not is_stable:
+                pt.roi_status = reason
+                pt.world_pos = None
+                continue
+
+            pt.roi_status = "VALID"
+            pt.world_pos = self.calibrator.image_to_world(u, v, source_width, source_height)
 
     def estimate_path_average_speed(self, trajectory: VehicleTrajectory) -> Optional[SpeedEstimate]:
         """
-        Estimates total path-average speed over entire track lifetime.
+        Estimates total path-average speed over entire track lifetime (using valid inside-ROI samples only).
         """
-        valid_pts = [p for p in trajectory.points if p.world_pos is not None]
+        valid_pts = [
+            p for p in trajectory.points 
+            if p.world_pos is not None and getattr(p, "roi_status", "VALID") == "VALID"
+        ]
         if len(valid_pts) < 2:
             return None
 
@@ -128,15 +145,42 @@ class MonocularSpeedEstimator:
         target_frame_idx: int
     ) -> Optional[SpeedEstimate]:
         """
-        Estimates vehicle speed at target_frame_idx using a temporal window around target_frame_idx.
+        Estimates vehicle speed at target_frame_idx using a temporal window around target_frame_idx,
+        restricting regression strictly to valid inside-ROI samples.
         """
         if not trajectory.points:
             return None
 
+        target_pt = next((p for p in trajectory.points if p.frame_index == target_frame_idx), None)
+        target_status = getattr(target_pt, "roi_status", "VALID") if target_pt else "OUT_OF_ROI"
+
+        if target_pt is None or target_status != "VALID" or target_pt.world_pos is None:
+            return SpeedEstimate(
+                speed_method=target_status,
+                distance_m=0.0,
+                elapsed_time_s=0.0,
+                speed_mps=0.0,
+                speed_kmh=0.0,
+                uncertainty_kmh=0.0,
+                validity=target_status,
+                sample_count=0,
+                instantaneous_kmh=0.0,
+                smoothed_kmh=0.0,
+                confidence_low_kmh=0.0,
+                confidence_high_kmh=0.0,
+                error_components={
+                    "homography_perspective_pct": 0.0,
+                    "centroid_jitter_pct": 0.0,
+                    "timestamp_variance_pct": 0.0
+                }
+            )
+
         half_w = self.window_size_frames // 2
         window_pts = [
             p for p in trajectory.points
-            if abs(p.frame_index - target_frame_idx) <= half_w and p.world_pos is not None
+            if abs(p.frame_index - target_frame_idx) <= half_w 
+            and getattr(p, "roi_status", "VALID") == "VALID"
+            and p.world_pos is not None
         ]
 
         if len(window_pts) < 3:
@@ -161,7 +205,7 @@ class MonocularSpeedEstimator:
         dist_m = float(np.hypot(X[-1] - X[0], Y[-1] - Y[0]))
 
         inst_estimate = self._calculate_instantaneous_speed(trajectory, target_frame_idx)
-        inst_kmh = inst_estimate.instantaneous_kmh if inst_estimate else smoothed_kmh
+        inst_kmh = inst_estimate.instantaneous_kmh if (inst_estimate and inst_estimate.validity == "VALID") else smoothed_kmh
 
         rmse_cal = self.calibrator.compute_reprojection_rmse()
         mse_x = res_x[0] / len(t) if len(res_x) > 0 else 0.05
@@ -213,23 +257,63 @@ class MonocularSpeedEstimator:
             return None
 
         curr_i = idx_list[0]
-        if curr_i == 0:
-            if len(trajectory.points) < 2:
-                return None
-            p1 = trajectory.points[0]
-            p2 = trajectory.points[1]
-        else:
-            p1 = trajectory.points[curr_i - 1]
-            p2 = trajectory.points[curr_i]
+        curr_p = trajectory.points[curr_i]
+        curr_status = getattr(curr_p, "roi_status", "VALID")
 
-        if p1.world_pos is None or p2.world_pos is None:
-            return None
+        if curr_status != "VALID" or curr_p.world_pos is None:
+            return SpeedEstimate(
+                speed_method=curr_status,
+                distance_m=0.0,
+                elapsed_time_s=0.0,
+                speed_mps=0.0,
+                speed_kmh=0.0,
+                uncertainty_kmh=0.0,
+                validity=curr_status,
+                sample_count=0,
+                instantaneous_kmh=0.0,
+                smoothed_kmh=0.0,
+                confidence_low_kmh=0.0,
+                confidence_high_kmh=0.0,
+                error_components={
+                    "homography_perspective_pct": 0.0,
+                    "centroid_jitter_pct": 0.0,
+                    "timestamp_variance_pct": 0.0
+                }
+            )
 
-        dt = p2.timestamp - p1.timestamp
+        valid_prev = None
+        for i in range(curr_i - 1, -1, -1):
+            p = trajectory.points[i]
+            if getattr(p, "roi_status", "VALID") == "VALID" and p.world_pos is not None:
+                valid_prev = p
+                break
+
+        if not valid_prev:
+            return SpeedEstimate(
+                speed_method="INITIAL_ROI_SAMPLE",
+                distance_m=0.0,
+                elapsed_time_s=0.0,
+                speed_mps=0.0,
+                speed_kmh=0.0,
+                uncertainty_kmh=0.0,
+                validity="VALID",
+                sample_count=1,
+                instantaneous_kmh=0.0,
+                smoothed_kmh=0.0,
+                confidence_low_kmh=0.0,
+                confidence_high_kmh=0.0,
+                error_components={
+                    "homography_perspective_pct": 0.0,
+                    "centroid_jitter_pct": 0.0,
+                    "timestamp_variance_pct": 0.0
+                }
+            )
+
+        dt = curr_p.timestamp - valid_prev.timestamp
         if dt < 1e-4:
             return None
 
-        dist = float(np.hypot(p2.world_pos[0] - p1.world_pos[0], p2.world_pos[1] - p1.world_pos[1]))
+        dist = float(np.hypot(curr_p.world_pos[0] - valid_prev.world_pos[0], curr_p.world_pos[1] - valid_prev.world_pos[1]))
         speed_mps = float(dist / dt)
         inst_kmh = float(speed_mps * 3.6)
 

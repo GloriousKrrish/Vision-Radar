@@ -101,19 +101,114 @@ export const WorkbenchView: React.FC = () => {
   const [speedLimit, setSpeedLimit] = useState(80);
   const [selTrack, setSelTrack] = useState<number | null>(null);
   const [violations, setViolations] = useState<any[]>([]);
-  const [srcName, setSrcName] = useState("Synthetic highway");
-  const [isRealVideo, setIsRealVideo] = useState(false);
+  const [srcName, setSrcName] = useState("Traffic1.mp4");
+  const [isRealVideo, setIsRealVideo] = useState(true);
   const [jobStatus, setJobStatus] = useState<string | null>(null);
+  const [activeJobId, setActiveJobId] = useState<number | null>(null);
   const [realTracks, setRealTracks] = useState<any[]>([]);
-  const [telemetry, setTelemetry] = useState<any>(null);
-
+  const [telemetry, setTelemetry] = useState<any | null>(null);
+  const [realCalib, setRealCalib] = useState<any | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const seenRef = useRef<Set<number>>(new Set());
+  const frameMapRef = useRef<Map<number, any[]>>(new Map());
+  const isUploadingRef = useRef<boolean>(false);
+
+  // Initialize default real video stream element if not present
+  useEffect(() => {
+    if (!videoRef.current && isRealVideo) {
+      const vidElem = document.createElement('video');
+      vidElem.src = '/api/v1/videos/1/stream';
+      vidElem.muted = true;
+      vidElem.loop = true;
+      vidElem.play().catch(() => {});
+      videoRef.current = vidElem;
+    }
+  }, [isRealVideo]);
+
+  // Index real tracks strictly by frame_index (Exact Canonical Frame Alignment)
+  useEffect(() => {
+    const map = new Map<number, any[]>();
+    if (realTracks && realTracks.length > 0) {
+      realTracks.forEach((trk: any) => {
+        const traj = trk.trajectory || [];
+        traj.forEach((pt: any) => {
+          const f = pt.frame_index;
+          if (f !== undefined && f !== null) {
+            if (!map.has(f)) map.set(f, []);
+            
+            const rawBbox = pt.bbox;
+            if (rawBbox && rawBbox.length >= 4) {
+              let [rx, ry, rw, rh] = rawBbox;
+              if (rw > rx) rw = rw - rx;
+              if (rh > ry) rh = rh - ry;
+
+              const speedInfo = trk.speed_measurements?.find((s: any) => s.frame === f || s.frame_index === f) || trk.speed_measurements?.[0];
+              const speedKmh = speedInfo ? speedInfo.smoothed_kmh : null;
+              const speedStatus = speedInfo?.error_components?.validity || (speedKmh != null ? 'VALID' : 'OUT_OF_ROI');
+
+              map.get(f)!.push({
+                track_id: trk.track_id,
+                vehicle_class: trk.vehicle_class,
+                confidence: trk.confidence,
+                rx,
+                ry,
+                rw,
+                rh,
+                speedKmh,
+                speedStatus
+              });
+            }
+          }
+        });
+      });
+    }
+    frameMapRef.current = map;
+  }, [realTracks]);
 
   useEffect(() => {
     calcH();
   }, []);
+
+  // Auto-fetch latest succeeded job & tracks ONLY on initial mount when no job upload is active
+  useEffect(() => {
+    if (isRealVideo && realTracks.length === 0 && !activeJobId && !isUploadingRef.current) {
+      const loadLatest = async () => {
+        try {
+          const res = await fetch('/api/v1/jobs?status=SUCCEEDED');
+          if (res.ok) {
+            const jobs = await res.json();
+            if (jobs && jobs.length > 0) {
+              const job = jobs[0];
+              if (isUploadingRef.current) return;
+              setActiveJobId(job.id);
+              setJobStatus(`Job #${job.id} Complete!`);
+              if (job.telemetry) setTelemetry(job.telemetry);
+              
+              const trkRes = await fetch(`/api/v1/jobs/${job.id}/tracks`);
+              if (trkRes.ok) {
+                const trkData = await trkRes.json();
+                if (trkData && trkData.length > 0) {
+                  setRealTracks(trkData);
+                }
+              }
+
+              const calibRes = await fetch(`/api/v1/videos/${job.video_id}/calibrations`);
+              if (calibRes.ok) {
+                const calibData = await calibRes.json();
+                if (calibData && calibData.length > 0) {
+                  setRealCalib(calibData[0]);
+                }
+              }
+            }
+          }
+        } catch (err) {
+          console.error("Auto-loading latest succeeded job error:", err);
+        }
+      };
+      loadLatest();
+    }
+  }, [isRealVideo, activeJobId]);
 
   // Animation Loop
   useEffect(() => {
@@ -157,17 +252,24 @@ export const WorkbenchView: React.FC = () => {
       // Clean Real Video Render
       cx.drawImage(vidElem, 0, 0, W, H);
 
-      // Draw Homography Calibration Outline Guide
+      // Draw Dynamic Calibration Overlay from backend Calibration model
+      const calibPts = realCalib?.image_points_json || [[330, 160], [470, 160], [748, 435], [51, 435]];
+      const maxCalibX = Math.max(...calibPts.map((p: any) => p[0]));
+      const displayPts = calibPts.map(([x, y]: [number, number]) => [
+        maxCalibX <= 850 ? x : x * scaleX,
+        maxCalibX <= 850 ? y : y * scaleY
+      ]);
+
       cx.strokeStyle = '#4F46E5';
       cx.fillStyle = '#4F46E511';
       cx.lineWidth = 1.5;
       cx.beginPath();
-      HP.forEach((p, i) => (i ? cx.lineTo(...p) : cx.moveTo(...p)));
+      displayPts.forEach((p: number[], i: number) => (i ? cx.lineTo(p[0], p[1]) : cx.moveTo(p[0], p[1])));
       cx.closePath();
       cx.fill();
       cx.stroke();
 
-      HP.forEach((p, i) => {
+      displayPts.forEach((p: number[], i: number) => {
         cx.fillStyle = '#4F46E5';
         cx.beginPath();
         cx.arc(p[0], p[1], 5, 0, 7);
@@ -178,64 +280,82 @@ export const WorkbenchView: React.FC = () => {
         cx.fillText('P' + (i + 1), p[0], p[1] + 3);
       });
 
-      // Overlay Real Detected Tracks (Strict frame-synchronization & tight scaling)
-      if (realTracks.length > 0) {
-        realTracks.forEach(trk => {
-          if (!trk.trajectory || !Array.isArray(trk.trajectory) || trk.trajectory.length === 0) return;
-          
-          // Match point strictly within +/- 6 frames of current video playback timestamp
-          const point = trk.trajectory.find((pt: any) => Math.abs(pt.frame_index - currentVidFrame) <= 6);
-          
-          // STRICT RULE: If vehicle is not active in current frame, DO NOT draw a box on empty road
-          if (!point) return;
+      // Render Canonical Frame Detections with 1-frame video quantization tolerance
+      let currentFrameDets = frameMapRef.current.get(currentVidFrame);
+      if ((!currentFrameDets || currentFrameDets.length === 0) && frameMapRef.current.size > 0) {
+        currentFrameDets = frameMapRef.current.get(currentVidFrame - 1) || frameMapRef.current.get(currentVidFrame + 1);
+      }
 
-          const rawBbox = point.bbox;
-          if (!rawBbox || rawBbox.length < 4) return;
+      if (currentFrameDets && currentFrameDets.length > 0) {
+        currentFrameDets.forEach(det => {
+          const bx = det.rx * scaleX;
+          const by = det.ry * scaleY;
+          const bw = Math.max(16, det.rw * scaleX);
+          const bh = Math.max(14, det.rh * scaleY);
 
-          let rx = rawBbox[0];
-          let ry = rawBbox[1];
-          let rw = rawBbox[2];
-          let rh = rawBbox[3];
+          const hasValidSpeed = det.speedKmh !== null && det.speedKmh !== undefined && det.speedKmh > 0;
+          const bad = hasValidSpeed && det.speedKmh > speedLimit;
+          const col = !hasValidSpeed ? '#94A3B8' : bad ? '#EF4444' : '#10B981';
+          const isSelected = selTrack === det.track_id;
 
-          // Determine if bbox is [x1, y1, x2, y2] or [x, y, w, h]
-          if (rw > rx) {
-            rw = rw - rx;
-          }
-          if (rh > ry) {
-            rh = rh - ry;
-          }
+          // 1. Semi-transparent glassmorphism tint fill over vehicle box
+          cx.fillStyle = isSelected ? '#F59E0B25' : (col + '1A');
+          cx.fillRect(bx, by, bw, bh);
 
-          const bx = rx * scaleX;
-          const by = ry * scaleY;
-          const bw = Math.max(15, rw * scaleX);
-          const bh = Math.max(12, rh * scaleY);
+          // 2. High-precision HUD Radar Corner Brackets
+          const bracketLen = Math.min(10, Math.min(bw, bh) * 0.3);
+          cx.strokeStyle = isSelected ? '#F59E0B' : col;
+          cx.lineWidth = isSelected ? 3 : 2;
 
-          const speedInfo = trk.speed_measurements?.find((s: any) => Math.abs(s.frame - currentVidFrame) <= 6) || trk.speed_measurements?.[0];
-          const speedKmh = speedInfo ? speedInfo.smoothed_kmh : 60.0;
-          const bad = speedKmh > speedLimit;
-          const col = bad ? '#EF4444' : '#10B981';
+          cx.beginPath();
+          // Top-Left
+          cx.moveTo(bx, by + bracketLen); cx.lineTo(bx, by); cx.lineTo(bx + bracketLen, by);
+          // Top-Right
+          cx.moveTo(bx + bw - bracketLen, by); cx.lineTo(bx + bw, by); cx.lineTo(bx + bw, by + bracketLen);
+          // Bottom-Right
+          cx.moveTo(bx + bw, by + bh - bracketLen); cx.lineTo(bx + bw, by + bh); cx.lineTo(bx + bw - bracketLen, by + bh);
+          // Bottom-Left
+          cx.moveTo(bx + bracketLen, by + bh); cx.lineTo(bx, by + bh); cx.lineTo(bx, by + bh - bracketLen);
+          cx.stroke();
 
-          // Tight vehicle bounding box outline
-          cx.strokeStyle = selTrack === trk.track_id ? '#F59E0B' : col;
-          cx.lineWidth = selTrack === trk.track_id ? 3 : 2;
+          // 3. Subtle connecting box outline
+          cx.strokeStyle = isSelected ? '#F59E0B44' : (col + '44');
+          cx.lineWidth = 1;
           cx.strokeRect(bx, by, bw, bh);
 
-          // Speed & Identity Badge Tag
-          const clsLabel = trk.vehicle_class || 'Vehicle';
-          const tx = `#${trk.track_id} · ${clsLabel} · ${Math.round(speedKmh)} km/h`;
+          // 4. Vehicle Ground Contact Anchor Indicator Dot
+          cx.fillStyle = isSelected ? '#F59E0B' : col;
+          cx.beginPath();
+          cx.arc(bx + bw / 2, by + bh, 3, 0, 2 * Math.PI);
+          cx.fill();
+
+          // 5. HUD Speed & Identity Badge Header
+          const clsLabel = det.vehicle_class || 'Vehicle';
+          const tx = hasValidSpeed 
+            ? `#${det.track_id} · ${clsLabel} · ${Math.round(det.speedKmh)} km/h`
+            : `#${det.track_id} · ${clsLabel} · [OUT OF ROI]`;
           cx.font = 'bold 11px sans-serif';
-          const tw = cx.measureText(tx).width + 10;
-          cx.fillStyle = col;
+          const tw = cx.measureText(tx).width + 12;
+          const badgeX = Math.max(2, Math.min(W - tw - 2, bx + bw / 2 - tw / 2));
+          const badgeY = Math.max(4, by - 22);
+
+          // Badge Background Pill
+          cx.fillStyle = '#0F172AEE';
+          cx.strokeStyle = isSelected ? '#F59E0B' : col;
+          cx.lineWidth = 1.5;
           cx.beginPath();
           if ((cx as any).roundRect) {
-            (cx as any).roundRect(bx + bw / 2 - tw / 2, Math.max(4, by - 22), tw, 18, 4);
+            (cx as any).roundRect(badgeX, badgeY, tw, 18, 5);
           } else {
-            cx.rect(bx + bw / 2 - tw / 2, Math.max(4, by - 22), tw, 18);
+            cx.rect(badgeX, badgeY, tw, 18);
           }
           cx.fill();
-          cx.fillStyle = '#fff';
+          cx.stroke();
+
+          // Badge Text
+          cx.fillStyle = isSelected ? '#FBBF24' : (col === '#EF4444' ? '#FCA5A5' : col === '#10B981' ? '#6EE7B7' : '#E2E8F0');
           cx.textAlign = 'center';
-          cx.fillText(tx, bx + bw / 2, Math.max(16, by - 8));
+          cx.fillText(tx, badgeX + tw / 2, badgeY + 13);
         });
       }
     } else {
@@ -354,8 +474,12 @@ export const WorkbenchView: React.FC = () => {
     const file = e.target.files?.[0];
     if (!file) return;
 
+    isUploadingRef.current = true;
     setSrcName(file.name);
     setIsRealVideo(true);
+    setRealTracks([]);
+    setActiveJobId(null);
+    setTelemetry(null);
     setJobStatus("Uploading video to backend...");
 
     const videoElem = document.createElement('video');
@@ -392,12 +516,15 @@ export const WorkbenchView: React.FC = () => {
         });
         if (jobRes.ok) {
           const jobData = await jobRes.json();
+          setActiveJobId(jobData.id);
           setJobStatus(`Processing Job #${jobData.id}...`);
           pollJob(jobData.id);
         }
       }
     } catch (err) {
       setJobStatus("Offline / Local playback active.");
+    } finally {
+      isUploadingRef.current = false;
     }
   };
 
@@ -424,6 +551,14 @@ export const WorkbenchView: React.FC = () => {
             setJobStatus(`Job #${job.id} Complete!`);
             if (job.telemetry) {
               setTelemetry(job.telemetry);
+            }
+
+            const finalTracksRes = await fetch(`/api/v1/jobs/${jobId}/tracks`);
+            if (finalTracksRes.ok) {
+              const trkData = await finalTracksRes.json();
+              if (trkData && trkData.length > 0) {
+                setRealTracks(trkData);
+              }
             }
 
             // Fetch Real Candidate Violations
@@ -458,16 +593,29 @@ export const WorkbenchView: React.FC = () => {
     const y = ((e.clientY - r.top) * H) / r.height;
     const t = frame / FPS;
 
-    if (isRealVideo && realTracks.length > 0) {
+    if (isRealVideo) {
+      const vidElem = videoRef.current;
+      if (!vidElem) return;
+      const vidW = vidElem.videoWidth || 1920;
+      const vidH = vidElem.videoHeight || 1080;
+      const scaleX = W / vidW;
+      const scaleY = H / vidH;
+
+      const currentVidTime = vidElem.currentTime;
+      const currentVidFrame = Math.round(currentVidTime * FPS);
+      const frameDets = frameMapRef.current.get(currentVidFrame) || [];
+
       let hitTrk: number | null = null;
-      realTracks.forEach(trk => {
-        const point = trk.trajectory?.find((pt: any) => Math.abs(pt.frame_index - frame) <= 3) || trk.trajectory?.[0];
-        if (point) {
-          const [u, v] = point.anchor_pixel || [400, 300];
-          if (Math.hypot(x - u, y - v) < 60) hitTrk = trk.track_id;
+      frameDets.forEach(det => {
+        const bx = det.rx * scaleX;
+        const by = det.ry * scaleY;
+        const bw = Math.max(15, det.rw * scaleX);
+        const bh = Math.max(12, det.rh * scaleY);
+        if (x >= bx - 10 && x <= bx + bw + 10 && y >= by - 10 && y <= by + bh + 10) {
+          hitTrk = det.track_id;
         }
       });
-      if (hitTrk) {
+      if (hitTrk !== null) {
         setSelTrack(hitTrk);
         setPlaying(false);
       }
@@ -496,7 +644,7 @@ export const WorkbenchView: React.FC = () => {
   // Render Inspector Details
   const renderInspector = () => {
     if (isRealVideo) {
-      const activeTrk = realTracks.find(t => t.track_id === selTrack) || realTracks[0];
+      const activeTrk = realTracks.find((t: any) => t.track_id === selTrack) || realTracks[0];
       if (!activeTrk) {
         return <div className="mu">Click any vehicle bounding box on the video.</div>;
       }

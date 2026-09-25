@@ -98,11 +98,11 @@ class SpeedMeasurement(Base):
     track_id = Column(Integer, ForeignKey("tracks.id"), nullable=False)
     frame_index = Column(Integer, nullable=False)
     timestamp = Column(Float, nullable=False)
-    instantaneous_kmh = Column(Float, nullable=False)
-    smoothed_kmh = Column(Float, nullable=False)
-    uncertainty_kmh = Column(Float, nullable=False)
-    confidence_low_kmh = Column(Float, nullable=False)
-    confidence_high_kmh = Column(Float, nullable=False)
+    instantaneous_kmh = Column(Float, nullable=True)
+    smoothed_kmh = Column(Float, nullable=True)
+    uncertainty_kmh = Column(Float, nullable=True)
+    confidence_low_kmh = Column(Float, nullable=True)
+    confidence_high_kmh = Column(Float, nullable=True)
     error_components_json = Column(JSON, nullable=True)
     created_at = Column(DateTime, default=utcnow)
 
@@ -155,3 +155,64 @@ class Experiment(Base):
     r2_score = Column(Float, nullable=True)
     status = Column(String(32), default="COMPLETED")
     created_at = Column(DateTime, default=utcnow)
+
+class GroundTruthSequenceDB(Base):
+    __tablename__ = "gt_sequences"
+
+    id = Column(Integer, primary_key=True, index=True)
+    sequence_id = Column(String(128), unique=True, nullable=False)
+    video_id = Column(Integer, ForeignKey("videos.id"), nullable=True)
+    name = Column(String(255), nullable=False)
+    source = Column(String(128), nullable=False)
+    camera_calibration_json = Column(JSON, nullable=True)
+    metadata_json = Column(JSON, nullable=True)
+    sha256_hash = Column(String(64), nullable=True)
+    created_at = Column(DateTime, default=utcnow)
+
+class GroundTruthObservationDB(Base):
+    __tablename__ = "gt_observations"
+
+    id = Column(Integer, primary_key=True, index=True)
+    sequence_id = Column(String(128), ForeignKey("gt_sequences.sequence_id"), nullable=False)
+    vehicle_id = Column(String(128), nullable=False)
+    timestamp = Column(Float, nullable=False)
+    frame_index = Column(Integer, nullable=False, default=0)
+    speed_mps = Column(Float, nullable=False)
+    speed_kmh = Column(Float, nullable=False)
+    position_x = Column(Float, nullable=False)
+    position_y = Column(Float, nullable=False)
+    lane_id = Column(String(64), default="Lane 1")
+    confidence = Column(Float, default=1.0)
+    created_at = Column(DateTime, default=utcnow)
+
+class BenchmarkExperimentDB(Base):
+    __tablename__ = "benchmark_experiments"
+
+    id = Column(Integer, primary_key=True, index=True)
+    experiment_id = Column(String(128), unique=True, nullable=False)
+    name = Column(String(255), nullable=False)
+    video_id = Column(Integer, ForeignKey("videos.id"), nullable=True)
+    gt_sequence_id = Column(String(128), ForeignKey("gt_sequences.sequence_id"), nullable=True)
+    config_json = Column(JSON, nullable=True)
+    detector_model = Column(String(128), nullable=False)
+    tracker_model = Column(String(128), nullable=False)
+    speed_method = Column(String(128), nullable=False)
+    smoothing_method = Column(String(128), nullable=False)
+    metrics_json = Column(JSON, nullable=True)
+    telemetry_json = Column(JSON, nullable=True)
+    created_at = Column(DateTime, default=utcnow)
+
+class BenchmarkMatchDB(Base):
+    __tablename__ = "benchmark_matches"
+
+    id = Column(Integer, primary_key=True, index=True)
+    experiment_id = Column(String(128), ForeignKey("benchmark_experiments.experiment_id"), nullable=False)
+    gt_observation_id = Column(Integer, ForeignKey("gt_observations.id"), nullable=True)
+    track_id = Column(Integer, nullable=False)
+    frame_index = Column(Integer, nullable=False, default=0)
+    gt_speed_kmh = Column(Float, nullable=False)
+    est_speed_kmh = Column(Float, nullable=False)
+    error_kmh = Column(Float, nullable=False)
+    abs_error_kmh = Column(Float, nullable=False)
+    uncertainty_kmh = Column(Float, nullable=False)
+    matched_at = Column(DateTime, default=utcnow)

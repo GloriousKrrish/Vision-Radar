@@ -104,13 +104,18 @@ def run_job(job_id: int):
             tracks = tracker.update(dets, frame_idx, timestamp)
 
             active_track_dicts = []
+            src_w = 1920.0 if meta.width < 1000 else float(meta.width)
+            src_h = 1080.0 if meta.height < 600 else float(meta.height)
             for trk in tracks:
                 active_tracks[trk.track_id] = trk
-                speed_estimator.project_trajectory(trk.trajectory)
+                speed_estimator.project_trajectory(trk.trajectory, source_width=src_w, source_height=src_h)
                 est = speed_estimator.estimate_speed_at_frame(trk.trajectory, target_frame_idx=frame_idx)
-                if est is not None:
+                if est is not None and est.validity == "VALID":
                     trk.speed_kmh = est.smoothed_kmh
                     trk.speed_uncertainty_kmh = est.uncertainty_kmh
+                else:
+                    trk.speed_kmh = None
+                    trk.speed_uncertainty_kmh = None
 
                     # Save candidate violations
                     viol = rule_engine.evaluate_track(
@@ -207,7 +212,7 @@ def run_job(job_id: int):
 
             for p in trk.trajectory.points:
                 est = speed_estimator.estimate_speed_at_frame(trk.trajectory, target_frame_idx=p.frame_index)
-                if est:
+                if est and est.validity in ("VALID", "LOW_CONFIDENCE") and est.smoothed_kmh is not None and est.smoothed_kmh > 0:
                     db_sm = SpeedMeasurement(
                         track_id=db_trk.id,
                         frame_index=p.frame_index,
@@ -217,7 +222,20 @@ def run_job(job_id: int):
                         uncertainty_kmh=est.uncertainty_kmh,
                         confidence_low_kmh=est.confidence_low_kmh,
                         confidence_high_kmh=est.confidence_high_kmh,
-                        error_components_json=est.error_components
+                        error_components_json={**(est.error_components or {}), "validity": est.validity}
+                    )
+                    db.add(db_sm)
+                elif est:
+                    db_sm = SpeedMeasurement(
+                        track_id=db_trk.id,
+                        frame_index=p.frame_index,
+                        timestamp=p.timestamp,
+                        instantaneous_kmh=None,
+                        smoothed_kmh=None,
+                        uncertainty_kmh=None,
+                        confidence_low_kmh=None,
+                        confidence_high_kmh=None,
+                        error_components_json={"validity": est.validity}
                     )
                     db.add(db_sm)
 
