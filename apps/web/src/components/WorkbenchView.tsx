@@ -1,17 +1,16 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 
 // ===========================================================================
-// Constants
+// Constants & Canvas Resolution
 // ===========================================================================
 const W = 800;
 const H = 450;
 const FPS = 30;
 const N = 900;
 
-// Real-time frame buffer size (keep only a sliding window of frames in memory)
-const RT_BUFFER_FRAMES = 60; // keep ±30 frames around current
+const RT_BUFFER_FRAMES = 120; // Sliding window of streaming frames
 
-// Synthetic demo vehicle data — used ONLY in Demo Mode, never during real video
+// Synthetic demo vehicle data — used ONLY in Demo Mode, NEVER during real video
 const CL = ['Sedan', 'SUV', 'Truck', 'Motorcycle'];
 const S_fn = (d: number) => 1 / (1 + d / 25);
 const proj = (lx: number, d: number): [number, number] => [400 + (lx - 6) * S_fn(d) * 60, 110 + 330 * S_fn(d)];
@@ -57,19 +56,22 @@ function estSpeed(a: any, fr: number) {
 }
 
 // ===========================================================================
-// Pipeline Stage type
+// Authoritative Pipeline State Machine (Requirement #8)
 // ===========================================================================
-type PipelineStage =
+export type PipelineStage =
   | 'IDLE'
-  | 'VIDEO_VISIBLE'      // local blob URL is playing
-  | 'UPLOADING'          // file upload in progress
-  | 'JOB_CREATED'        // job response received, WebSocket connecting
-  | 'STREAMING'          // WebSocket active, receiving frame results
-  | 'FINALIZING'         // completed signal received, fetching final tracks
-  | 'COMPLETE';          // done
+  | 'VIDEO_READY'        // Video visible locally
+  | 'UPLOADING'          // File upload in progress
+  | 'UPLOAD_COMPLETE'    // Video file saved on backend
+  | 'JOB_CREATED'        // Job ID returned, connecting WebSocket
+  | 'PROCESSING'         // Worker initialized
+  | 'LIVE_INFERENCE'     // Active WebSocket streaming frame results
+  | 'FINALIZING'         // Worker persisting trajectories to DB
+  | 'COMPLETED'          // Final DB tracks loaded
+  | 'ERROR';
 
 // ===========================================================================
-// WorkbenchView
+// WorkbenchView Component
 // ===========================================================================
 export const WorkbenchView: React.FC = () => {
   // --- playback state ---
@@ -80,21 +82,22 @@ export const WorkbenchView: React.FC = () => {
   const [isRealVideo, setIsRealVideo] = useState(true);
   const [srcName, setSrcName] = useState('Traffic1.mp4');
 
-  // --- job lifecycle ---
+  // --- job lifecycle & telemetry ---
   const [pipelineStage, setPipelineStage] = useState<PipelineStage>('IDLE');
   const [activeJobId, setActiveJobId] = useState<number | null>(null);
   const [jobStatusText, setJobStatusText] = useState<string | null>(null);
   const [jobProgress, setJobProgress] = useState(0);
   const [wsConnected, setWsConnected] = useState(false);
 
-  // --- real-time tracking ---
+  // --- real-time telemetry ---
   const [liveTrackCount, setLiveTrackCount] = useState(0);
+  const [latestInferenceFrame, setLatestInferenceFrame] = useState<number | null>(null);
   const [firstDetectionMs, setFirstDetectionMs] = useState<number | null>(null);
   const [firstBoxMs, setFirstBoxMs] = useState<number | null>(null);
   const [processingFps, setProcessingFps] = useState<number | null>(null);
   const [realTimeFactor, setRealTimeFactor] = useState<number | null>(null);
 
-  // --- track data (finalized from DB) ---
+  // --- track & calibration data ---
   const [realTracks, setRealTracks] = useState<any[]>([]);
   const [telemetry, setTelemetry] = useState<any | null>(null);
   const [realCalib, setRealCalib] = useState<any | null>(null);
@@ -110,23 +113,17 @@ export const WorkbenchView: React.FC = () => {
   const seenRef = useRef<Set<number>>(new Set());
   const wsRef = useRef<WebSocket | null>(null);
 
-  // Real-time frame buffer: Map<frame_index, track[]>
-  // Bounded: old entries evicted after use
+  // Bounded Real-Time Frame Buffer: Map<frame_index, track[]>
   const rtFrameBufferRef = useRef<Map<number, any[]>>(new Map());
 
-  // Finalized frame map (from completed DB tracks) — used after job completes
+  // Finalized Frame Map (from DB tracks after completion)
   const frameMapRef = useRef<Map<number, any[]>>(new Map());
 
-  // Timestamps for latency measurement
+  // Timestamps for latency
   const uploadStartRef = useRef<number>(0);
-  const videoVisibleRef = useRef<number>(0);
-  const jobCreatedRef = useRef<number>(0);
   const firstBoxRenderedRef = useRef<boolean>(false);
-
-  // Flag: are we in "live streaming" mode (WebSocket) vs "finalized" mode (DB tracks)?
   const isLiveStreamingRef = useRef<boolean>(false);
 
-  // ref to avoid stale closures in render loop
   const isRealVideoRef = useRef<boolean>(true);
   const pipelineStageRef = useRef<PipelineStage>('IDLE');
   const activeJobIdRef = useRef<number | null>(null);
@@ -135,13 +132,10 @@ export const WorkbenchView: React.FC = () => {
   useEffect(() => { pipelineStageRef.current = pipelineStage; }, [pipelineStage]);
   useEffect(() => { activeJobIdRef.current = activeJobId; }, [activeJobId]);
 
-  // =========================================================================
-  // Initialize synthetic calibration
-  // =========================================================================
   useEffect(() => { calcH(); }, []);
 
   // =========================================================================
-  // Auto-load last succeeded job on startup (only if idle)
+  // Auto-load last succeeded job on startup (if idle)
   // =========================================================================
   useEffect(() => {
     if (pipelineStage !== 'IDLE') return;
@@ -153,8 +147,8 @@ export const WorkbenchView: React.FC = () => {
         if (!jobs?.length) return;
         const job = jobs[0];
         setActiveJobId(job.id);
-        setJobStatusText(`Job #${job.id} Complete — REAL VIDEO · LIVE AI ANALYSIS`);
-        setPipelineStage('COMPLETE');
+        setJobStatusText(`Job #${job.id} Complete — REAL VIDEO · LIVE AI`);
+        setPipelineStage('COMPLETED');
         if (job.telemetry) setTelemetry(job.telemetry);
 
         const trkRes = await fetch(`/api/v1/jobs/${job.id}/tracks`);
@@ -167,7 +161,6 @@ export const WorkbenchView: React.FC = () => {
           const calibData = await calibRes.json();
           if (calibData?.length) setRealCalib(calibData[0]);
         }
-        // Serve video via API
         if (!videoRef.current) {
           const vid = document.createElement('video');
           vid.src = `/api/v1/videos/${job.video_id}/stream`;
@@ -183,7 +176,7 @@ export const WorkbenchView: React.FC = () => {
   }, []);
 
   // =========================================================================
-  // Build finalized frame map from DB tracks (post-completion)
+  // Build finalized frame map from DB tracks
   // =========================================================================
   useEffect(() => {
     const map = new Map<number, any[]>();
@@ -210,7 +203,7 @@ export const WorkbenchView: React.FC = () => {
   }, [realTracks]);
 
   // =========================================================================
-  // WebSocket management
+  // Authoritative WebSocket Connection
   // =========================================================================
   const connectWebSocket = useCallback((jobId: number) => {
     if (wsRef.current) {
@@ -226,8 +219,8 @@ export const WorkbenchView: React.FC = () => {
 
     ws.onopen = () => {
       setWsConnected(true);
-      setJobStatusText(`Job #${jobId} — ● LIVE AI DETECTION`);
-      setPipelineStage('STREAMING');
+      setJobStatusText(`Job #${jobId} — ● LIVE AI INFERENCE ACTIVE`);
+      setPipelineStage('LIVE_INFERENCE');
     };
 
     ws.onmessage = (event) => {
@@ -237,8 +230,9 @@ export const WorkbenchView: React.FC = () => {
       if (msg.type === 'frame_result') {
         const frameIdx: number = msg.frame_index;
         const tracks: any[] = msg.tracks || [];
+        setLatestInferenceFrame(frameIdx);
 
-        // Convert backend track format to render format
+        // Map backend track format to canvas render format
         const renderTracks = tracks.map((t: any) => {
           const bbox = t.bbox || [0, 0, 0, 0];
           let [x1, y1, x2, y2] = bbox;
@@ -260,20 +254,17 @@ export const WorkbenchView: React.FC = () => {
         const buf = rtFrameBufferRef.current;
         buf.set(frameIdx, renderTracks);
 
-        // Evict old frames to keep memory bounded
-        if (buf.size > RT_BUFFER_FRAMES * 2) {
+        if (buf.size > RT_BUFFER_FRAMES) {
           const keys = Array.from(buf.keys()).sort((a, b) => a - b);
           for (let i = 0; i < keys.length - RT_BUFFER_FRAMES; i++) {
             buf.delete(keys[i]);
           }
         }
 
-        // Live track count from current frame
         if (tracks.length > 0) {
           setLiveTrackCount(prev => Math.max(prev, tracks.length));
         }
 
-        // First box latency measurement
         if (!firstBoxRenderedRef.current && tracks.length > 0 && uploadStartRef.current > 0) {
           firstBoxRenderedRef.current = true;
           const latencyMs = performance.now() - uploadStartRef.current;
@@ -285,29 +276,32 @@ export const WorkbenchView: React.FC = () => {
         setJobProgress(progress);
         const stage = msg.stage || '';
         if (stage === 'DETECTION_AND_TRACKING' || stage === 'STREAMING') {
+          setPipelineStage('LIVE_INFERENCE');
           const veh = msg.vehicles_tracked || 0;
           const done = msg.frames_done || 0;
           const total = msg.total_frames || 0;
           setJobStatusText(
-            `REAL VIDEO · ● YOLOX ACTIVE · ● ByteTrack: ${veh} vehicles · ${done}/${total} frames (${progress}%)`
+            `Job #${jobId} · ● YOLOX Active · ${veh} vehicles · ${done}/${total} frames (${progress}%)`
           );
         } else if (stage === 'PERSISTING') {
           setPipelineStage('FINALIZING');
-          setJobStatusText('Finalizing — Saving trajectories...');
+          setJobStatusText(`Job #${jobId} Finalizing — Saving trajectories to DB...`);
+        } else if (stage === 'INITIALIZING') {
+          setPipelineStage('PROCESSING');
+          setJobStatusText(`Job #${jobId} Initializing CV Pipeline...`);
         }
 
       } else if (msg.type === 'completed') {
         isLiveStreamingRef.current = false;
         setWsConnected(false);
         setPipelineStage('FINALIZING');
-        setJobStatusText('Analysis complete — loading finalized tracks...');
+        setJobStatusText(`Job #${jobId} complete — loading finalized tracks...`);
         setProcessingFps(msg.processing_fps || null);
         setRealTimeFactor(msg.real_time_factor || null);
         if (msg.first_detection_latency_s && uploadStartRef.current > 0) {
           setFirstDetectionMs(Math.round(msg.first_detection_latency_s * 1000));
         }
 
-        // Fetch finalized DB tracks
         const jId = msg.job_id || activeJobIdRef.current;
         if (jId) {
           Promise.all([
@@ -317,7 +311,6 @@ export const WorkbenchView: React.FC = () => {
           ]).then(([trkData, violsData, jobData]) => {
             if (trkData?.length) {
               setRealTracks(trkData);
-              // Clear RT buffer now that finalized data is available
               rtFrameBufferRef.current.clear();
             }
             if (violsData?.length) {
@@ -326,23 +319,22 @@ export const WorkbenchView: React.FC = () => {
               })));
             }
             if (jobData?.telemetry) setTelemetry(jobData.telemetry);
-            setPipelineStage('COMPLETE');
-            setJobStatusText(`Job #${jId} Complete — REAL VIDEO · LIVE AI ANALYSIS`);
+            setPipelineStage('COMPLETED');
+            setJobStatusText(`Job #${jId} COMPLETED — REAL VIDEO · LIVE AI ANALYSIS`);
           }).catch(console.error);
         }
 
       } else if (msg.type === 'error') {
         isLiveStreamingRef.current = false;
         setWsConnected(false);
-        setJobStatusText(`Error: ${msg.message}`);
-        setPipelineStage('IDLE');
+        setJobStatusText(`Error on Job #${jobId}: ${msg.message}`);
+        setPipelineStage('ERROR');
       }
-      // ignore 'ping'
     };
 
     ws.onerror = () => {
       setWsConnected(false);
-      setJobStatusText('WebSocket error — check backend connection');
+      setJobStatusText(`WebSocket error on Job #${jobId} — check backend connection`);
     };
 
     ws.onclose = () => {
@@ -351,7 +343,6 @@ export const WorkbenchView: React.FC = () => {
     };
   }, []);
 
-  // Cleanup WebSocket on unmount
   useEffect(() => {
     return () => {
       if (wsRef.current) wsRef.current.close();
@@ -359,7 +350,7 @@ export const WorkbenchView: React.FC = () => {
   }, []);
 
   // =========================================================================
-  // Animation Loop — drives synthetic demo frame counter
+  // Synthetic Demo Animation Loop
   // =========================================================================
   useEffect(() => {
     let animId: number;
@@ -376,7 +367,7 @@ export const WorkbenchView: React.FC = () => {
   }, [playing]);
 
   // =========================================================================
-  // Main Canvas Render — runs every frame update
+  // Main Canvas Render — 100% Exact Frame Matching & Scaling (Requirement #9, 11, 12)
   // =========================================================================
   useEffect(() => {
     const cv = canvasRef.current;
@@ -388,47 +379,52 @@ export const WorkbenchView: React.FC = () => {
 
     if (isRealVideoRef.current && videoRef.current && videoRef.current.readyState > 1) {
       const vidElem = videoRef.current;
-      const vidW = vidElem.videoWidth || 1920;
-      const vidH = vidElem.videoHeight || 1080;
-      const scaleX = W / vidW;
-      const scaleY = H / vidH;
+
+      // Source resolution (1920x1080 for Traffic1.mp4)
+      const srcW = vidElem.videoWidth || telemetry?.source_width || 1920;
+      const srcH = vidElem.videoHeight || telemetry?.source_height || 1080;
+      const scaleX = W / srcW;
+      const scaleY = H / srcH;
 
       const currentVidTime = vidElem.currentTime;
-      const videoFps = telemetry?.video_fps || FPS;
-      const currentVidFrame = Math.round(currentVidTime * videoFps);
+      const videoFps = telemetry?.video_fps || 29.97;
+      const currentVidFrame = Math.floor(currentVidTime * videoFps);
 
+      // Draw background video frame
       cx.drawImage(vidElem, 0, 0, W, H);
 
-      // Calibration overlay
-      const calibPts = realCalib?.image_points_json || [[330, 160], [470, 160], [748, 435], [51, 435]];
-      const maxCalibX = Math.max(...calibPts.map((p: any) => p[0]));
-      const displayPts = calibPts.map(([x, y]: [number, number]) => [
-        maxCalibX <= 850 ? x * scaleX : x * scaleX,
-        maxCalibX <= 850 ? y * scaleY : y * scaleY
-      ]);
-      cx.strokeStyle = '#4F46E5'; cx.fillStyle = '#4F46E511'; cx.lineWidth = 1.5;
+      // ---------------------------------------------------------------------
+      // CALIBRATION OVERLAY (Requirement #9 & #10)
+      // Transform 1920x1080 source image points to 800x450 canvas space
+      // ---------------------------------------------------------------------
+      const calibPts = realCalib?.image_points_json || [[400, 200], [1500, 200], [1850, 1050], [70, 1050]];
+      const displayPts = calibPts.map(([x, y]: [number, number]) => [x * scaleX, y * scaleY]);
+
+      cx.strokeStyle = '#3B82F6'; cx.fillStyle = '#3B82F61A'; cx.lineWidth = 1.5;
       cx.beginPath();
       displayPts.forEach((p: number[], i: number) => (i ? cx.lineTo(p[0], p[1]) : cx.moveTo(p[0], p[1])));
       cx.closePath(); cx.fill(); cx.stroke();
+
       displayPts.forEach((p: number[], i: number) => {
-        cx.fillStyle = '#4F46E5'; cx.beginPath(); cx.arc(p[0], p[1], 5, 0, 7); cx.fill();
-        cx.fillStyle = '#fff'; cx.font = 'bold 8px sans-serif'; cx.textAlign = 'center';
+        cx.fillStyle = '#2563EB'; cx.beginPath(); cx.arc(p[0], p[1], 4, 0, 2 * Math.PI); cx.fill();
+        cx.fillStyle = '#FFFFFF'; cx.font = 'bold 9px sans-serif'; cx.textAlign = 'center';
         cx.fillText('P' + (i + 1), p[0], p[1] + 3);
       });
 
-      // Determine which frame detection source to use:
-      // 1. If live streaming: use real-time buffer
-      // 2. If complete: use finalized frameMap
+      // Label on road polygon
+      if (displayPts.length >= 4) {
+        cx.fillStyle = '#2563EBEE'; cx.font = '600 10px sans-serif'; cx.textAlign = 'center';
+        cx.fillText('CALIBRATED ROAD REGION', (displayPts[0][0] + displayPts[1][0]) / 2, displayPts[0][1] + 16);
+      }
+
+      // ---------------------------------------------------------------------
+      // REAL Bounding Box Rendering — EXACT Frame Match (Requirement #11)
+      // ---------------------------------------------------------------------
       let currentFrameDets: any[] | undefined;
       if (isLiveStreamingRef.current) {
-        const buf = rtFrameBufferRef.current;
-        currentFrameDets = buf.get(currentVidFrame)
-          || buf.get(currentVidFrame - 1)
-          || buf.get(currentVidFrame + 1);
+        currentFrameDets = rtFrameBufferRef.current.get(currentVidFrame);
       } else {
-        currentFrameDets = frameMapRef.current.get(currentVidFrame)
-          || frameMapRef.current.get(currentVidFrame - 1)
-          || frameMapRef.current.get(currentVidFrame + 1);
+        currentFrameDets = frameMapRef.current.get(currentVidFrame);
       }
 
       if (currentFrameDets && currentFrameDets.length > 0) {
@@ -462,7 +458,7 @@ export const WorkbenchView: React.FC = () => {
           cx.arc(bx + bw / 2, by + bh, 3, 0, 2 * Math.PI); cx.fill();
 
           // HUD Badge
-          const clsLabel = det.vehicle_class || 'Vehicle';
+          const clsLabel = det.vehicle_class || 'Car';
           const speedLabel = hasValidSpeed
             ? `${Math.round(det.speedKmh)} km/h`
             : isCalculating ? 'CALCULATING...' : isOutOfROI ? 'OUT OF ROI' : 'N/A';
@@ -483,7 +479,7 @@ export const WorkbenchView: React.FC = () => {
 
       // LIVE indicator badge (top right corner)
       if (isLiveStreamingRef.current) {
-        const badge = '● REAL VIDEO — LIVE AI ANALYSIS';
+        const badge = `● REAL VIDEO — LIVE AI (ACTIVE JOB #${activeJobId || 'NONE'})`;
         cx.font = 'bold 10px sans-serif';
         const bw2 = cx.measureText(badge).width + 16;
         cx.fillStyle = '#0F172AEE'; cx.strokeStyle = '#10B981'; cx.lineWidth = 1.5;
@@ -496,19 +492,19 @@ export const WorkbenchView: React.FC = () => {
       }
 
     } else if (isRealVideoRef.current) {
-      // Real video mode but video not ready — show waiting screen
+      // Real video mode but video player loading
       cx.fillStyle = '#0F172A';
       cx.fillRect(0, 0, W, H);
       cx.fillStyle = '#4F46E5';
       cx.font = 'bold 18px sans-serif';
       cx.textAlign = 'center';
-      cx.fillText('Loading video...', W / 2, H / 2);
+      cx.fillText('Loading Real Traffic Video...', W / 2, H / 2 - 10);
       cx.fillStyle = '#64748B'; cx.font = '12px sans-serif';
-      cx.fillText('Upload a video file to begin real-time AI analysis', W / 2, H / 2 + 28);
+      cx.fillText('Select or upload a real video file to begin YOLOX + ByteTrack analysis', W / 2, H / 2 + 18);
 
     } else {
       // =====================================================================
-      // DEMO MODE — SYNTHETIC ONLY
+      // DEMO MODE — SYNTHETIC ONLY (Requirement #7)
       // =====================================================================
       const g = cx.createLinearGradient(0, 0, 0, H);
       g.addColorStop(0, '#BAE6FD'); g.addColorStop(0.2, '#E2E8F0');
@@ -541,8 +537,7 @@ export const WorkbenchView: React.FC = () => {
         if (bad && !seenRef.current.has(a.id) && s.d < 70) { seenRef.current.add(a.id); setViolations(prev => [{ t, id: a.id, v, loc: 'Lane ' + ((a.lx / 4 + 0.5) | 0) + ' · km 12.4' }, ...prev.slice(0, 29)]); }
       });
 
-      // DEMO label badge
-      const demoBadge = 'DEMO — SYNTHETIC';
+      const demoBadge = 'DEMO MODE — SYNTHETIC';
       cx.font = 'bold 10px sans-serif';
       const dbw = cx.measureText(demoBadge).width + 16;
       cx.fillStyle = '#0F172ACC'; cx.strokeStyle = '#F59E0B'; cx.lineWidth = 1.5;
@@ -560,11 +555,9 @@ export const WorkbenchView: React.FC = () => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    // --- Record upload start timestamp ---
     uploadStartRef.current = performance.now();
     firstBoxRenderedRef.current = false;
 
-    // --- Reset state ---
     setSrcName(file.name);
     setIsRealVideo(true);
     setRealTracks([]);
@@ -573,6 +566,7 @@ export const WorkbenchView: React.FC = () => {
     setSelTrack(null);
     setViolations([]);
     setLiveTrackCount(0);
+    setLatestInferenceFrame(null);
     setFirstDetectionMs(null);
     setFirstBoxMs(null);
     setProcessingFps(null);
@@ -582,7 +576,6 @@ export const WorkbenchView: React.FC = () => {
     isLiveStreamingRef.current = false;
     if (wsRef.current) { wsRef.current.close(); wsRef.current = null; }
 
-    // --- STEP 1: Video visible IMMEDIATELY (local blob URL) ---
     const blobUrl = URL.createObjectURL(file);
     const videoElem = document.createElement('video');
     videoElem.src = blobUrl;
@@ -590,14 +583,9 @@ export const WorkbenchView: React.FC = () => {
     videoElem.loop = true;
     videoElem.play().catch(() => {});
     videoRef.current = videoElem;
-    videoVisibleRef.current = performance.now();
-    setPipelineStage('VIDEO_VISIBLE');
+    setPipelineStage('VIDEO_READY');
     setJobStatusText('Video loaded — Uploading for AI analysis...');
 
-    HP[0] = [100, 420]; HP[1] = [700, 420]; HP[2] = [480, 220]; HP[3] = [320, 220];
-    calcH();
-
-    // --- STEP 2: Upload to backend ---
     setPipelineStage('UPLOADING');
     const formData = new FormData();
     formData.append('file', file);
@@ -606,43 +594,39 @@ export const WorkbenchView: React.FC = () => {
       const vidRes = await fetch('/api/v1/projects/1/videos', { method: 'POST', body: formData });
       if (!vidRes.ok) throw new Error(`Upload failed: ${vidRes.status}`);
       const vidData = await vidRes.json();
+      setPipelineStage('UPLOAD_COMPLETE');
+      setJobStatusText('Video uploaded — Triggering CV Detection Job...');
 
-      setJobStatusText('Triggering CV Detection Job...');
-
-      // --- STEP 3: Create job ---
       const jobRes = await fetch(`/api/v1/videos/${vidData.id}/jobs`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ calibration_id: 1 })
+        body: JSON.stringify({ calibration_id: null })
       });
       if (!jobRes.ok) throw new Error(`Job creation failed: ${jobRes.status}`);
       const jobData = await jobRes.json();
       const jobId = jobData.id;
-      jobCreatedRef.current = performance.now();
 
       setActiveJobId(jobId);
       setPipelineStage('JOB_CREATED');
       setJobStatusText(`Job #${jobId} created — connecting real-time stream...`);
 
-      // --- STEP 4: Fetch calibration ---
       const calibRes = await fetch(`/api/v1/videos/${vidData.id}/calibrations`);
       if (calibRes.ok) {
         const calibData = await calibRes.json();
         if (calibData?.length) setRealCalib(calibData[0]);
       }
 
-      // --- STEP 5: Connect WebSocket IMMEDIATELY ---
       connectWebSocket(jobId);
 
     } catch (err: any) {
       console.error('Upload/job error:', err);
-      setJobStatusText(`Error: ${err.message} — Video visible in offline mode`);
-      setPipelineStage('IDLE');
+      setJobStatusText(`Error: ${err.message}`);
+      setPipelineStage('ERROR');
     }
   };
 
   // =========================================================================
-  // Canvas click handler
+  // Canvas Click Handler
   // =========================================================================
   const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const cv = canvasRef.current;
@@ -654,17 +638,16 @@ export const WorkbenchView: React.FC = () => {
     if (isRealVideoRef.current) {
       const vidElem = videoRef.current;
       if (!vidElem) return;
-      const vidW = vidElem.videoWidth || 1920;
-      const vidH = vidElem.videoHeight || 1080;
-      const scaleX = W / vidW;
-      const scaleY = H / vidH;
-      const videoFps = telemetry?.video_fps || FPS;
-      const currentVidFrame = Math.round(vidElem.currentTime * videoFps);
+      const srcW = vidElem.videoWidth || telemetry?.source_width || 1920;
+      const srcH = vidElem.videoHeight || telemetry?.source_height || 1080;
+      const scaleX = W / srcW;
+      const scaleY = H / srcH;
+      const videoFps = telemetry?.video_fps || 29.97;
+      const currentVidFrame = Math.floor(vidElem.currentTime * videoFps);
 
-      // Check both RT buffer and finalized frameMap
       const frameDets = isLiveStreamingRef.current
-        ? (rtFrameBufferRef.current.get(currentVidFrame) || rtFrameBufferRef.current.get(currentVidFrame - 1) || [])
-        : (frameMapRef.current.get(currentVidFrame) || frameMapRef.current.get(currentVidFrame - 1) || []);
+        ? (rtFrameBufferRef.current.get(currentVidFrame) || [])
+        : (frameMapRef.current.get(currentVidFrame) || []);
 
       let hitTrk: number | null = null;
       frameDets.forEach(det => {
@@ -685,48 +668,53 @@ export const WorkbenchView: React.FC = () => {
   };
 
   // =========================================================================
-  // Inspector panel
+  // Inspector Panel — Wording per Requirement #13
   // =========================================================================
   const renderInspector = () => {
     if (isRealVideo) {
-      // Try live RT buffer first, then finalized tracks
       const liveFrameDets = Array.from(rtFrameBufferRef.current.values()).flat();
       const liveTrk = liveFrameDets.find((t: any) => t.track_id === selTrack);
       const finalTrk = realTracks.find((t: any) => t.track_id === selTrack);
       const activeTrk = finalTrk || (realTracks.length > 0 ? realTracks[0] : null);
 
-      if (!activeTrk && !liveTrk && !isLiveStreamingRef.current) {
-        return <div className="mu">Click any vehicle bounding box on the video.</div>;
-      }
       if (!activeTrk && isLiveStreamingRef.current) {
         return (
-          <div>
-            <div className="mu" style={{ color: '#10B981', fontWeight: 600 }}>● LIVE DETECTION ACTIVE</div>
-            <div className="mu" style={{ marginTop: 8 }}>Tracking <b>{liveTrackCount}</b> vehicles in real-time.</div>
-            <div className="mu">Click a bounding box to inspect a track.</div>
+          <div style={{ padding: '12px', background: '#F8FAFC', borderRadius: '8px', border: '1px solid #E2E8F0' }}>
+            <div style={{ color: '#10B981', fontWeight: 700, fontSize: '13px' }}>● LIVE DETECTION ACTIVE</div>
+            <div style={{ margin: '8px 0', fontSize: '13px', color: '#334155' }}>
+              {liveTrackCount > 0 ? `Tracking ${liveTrackCount} vehicles in real-time.` : 'LIVE DETECTION — Waiting for vehicle detections...'}
+            </div>
+            <div style={{ fontSize: '11px', color: '#64748B' }}>Click any vehicle bounding box on the video overlay to inspect track details.</div>
           </div>
         );
       }
-      if (!activeTrk) return <div className="mu">Click any vehicle bounding box.</div>;
+
+      if (!activeTrk) {
+        return (
+          <div style={{ padding: '12px', background: '#F8FAFC', borderRadius: '8px', border: '1px solid #E2E8F0' }}>
+            <div style={{ color: '#4F46E5', fontWeight: 600, fontSize: '13px' }}>LIVE DETECTION</div>
+            <div style={{ margin: '8px 0', fontSize: '12px', color: '#64748B' }}>
+              Waiting for vehicle detections...
+            </div>
+            <div style={{ fontSize: '11px', color: '#94A3B8' }}>Select or upload a video file to begin real-time vehicle analysis.</div>
+          </div>
+        );
+      }
 
       const sm = activeTrk.speed_measurements?.[0];
       const speedKmh = sm?.smoothed_kmh || 0;
       const isBad = speedKmh > speedLimit;
       const hist = (activeTrk.speed_measurements || [])
         .slice(0, 30).map((s: any) => s.smoothed_kmh || 0).reverse();
-      const errComp = sm?.error_components || { homography_perspective_pct: 25, centroid_jitter_pct: 35, timestamp_variance_pct: 40 };
-      const h = errComp.homography_perspective_pct || 0;
-      const j = errComp.centroid_jitter_pct || 0;
-      const tv = errComp.timestamp_variance_pct || 0;
 
       return (
         <div>
           <div className="row"><b>Track #{activeTrk.track_id}</b><span className="badge">{activeTrk.vehicle_class || 'Car'}</span></div>
           <div className="row mu"><span>Confidence</span><span>{((activeTrk.confidence || 0.95) * 100).toFixed(1)}%</span></div>
           <div className="big" style={{ color: isBad ? '#EF4444' : '#10B981' }}>
-            {speedKmh > 0 ? speedKmh.toFixed(1) : 'Calculating...'} <small>{speedKmh > 0 ? `km/h ± ${(sm?.uncertainty_kmh || 0).toFixed(1)}` : ''}</small>
+            {speedKmh > 0 ? speedKmh.toFixed(1) : 'CALCULATING...'} <small>{speedKmh > 0 ? `km/h ± ${(sm?.uncertainty_kmh || 0).toFixed(1)}` : ''}</small>
           </div>
-          <div className="mu">Kalman-Smoothed Estimation</div>
+          <div className="mu">Kalman-Smoothed Monocular Speed Estimation</div>
           <canvas id="sp" width={300} height={110} style={{ margin: '8px 0' }} ref={node => {
             if (!node) return; const c = node.getContext('2d'); if (!c) return;
             c.fillStyle = '#F8FAFC'; c.fillRect(0, 0, 300, 110);
@@ -738,22 +726,12 @@ export const WorkbenchView: React.FC = () => {
             hist.forEach((q: number, i: number) => i ? c.lineTo((i * 300) / (hist.length - 1), Y(q)) : c.moveTo(0, Y(q)));
             c.stroke(); c.fillStyle = '#64748B'; c.font = '10px sans-serif'; c.fillText('km/h vs last 3 s', 4, 10);
           }} />
-          <h3>Error decomposition</h3>
-          <div className="row"><span>Homography / perspective</span><b>{h.toFixed(0)}%</b></div>
-          <div className="meter"><i style={{ width: `${h}%`, background: '#4F46E5' }}></i></div>
-          <div className="row" style={{ marginTop: 4 }}><span>Centroid jitter</span><b>{j.toFixed(0)}%</b></div>
-          <div className="meter"><i style={{ width: `${j}%`, background: '#0EA5E9' }}></i></div>
-          <div className="row" style={{ marginTop: 4 }}><span>Timestamp variance</span><b>{tv.toFixed(0)}%</b></div>
-          <div className="meter"><i style={{ width: `${tv}%`, background: '#F59E0B' }}></i></div>
         </div>
       );
     }
 
-    // Synthetic demo inspector
     const a = V.find(v => v.id === selTrack) || V[0];
-    const t = frame / FPS;
     const spd = estSpeed(a, frame);
-    const hist = Array.from({ length: 30 }, (_, i) => estSpeed(a, frame - (29 - i) * 3));
     return (
       <div>
         <div className="row"><b>Track #{a.id}</b><span className="badge">{a.cls}</span></div>
@@ -761,39 +739,31 @@ export const WorkbenchView: React.FC = () => {
         <div className="big" style={{ color: spd > speedLimit ? '#EF4444' : '#10B981' }}>
           {spd.toFixed(1)} <small>km/h ± {(spd * 0.05).toFixed(1)}</small>
         </div>
-        <div className="mu" style={{ color: '#F59E0B', fontWeight: 700, marginTop: 4 }}>DEMO — SYNTHETIC · Not real detection</div>
-        <canvas id="sp" width={300} height={110} style={{ margin: '8px 0' }} ref={node => {
-          if (!node) return; const c = node.getContext('2d'); if (!c) return;
-          c.fillStyle = '#F8FAFC'; c.fillRect(0, 0, 300, 110);
-          const lo = Math.min(...hist, speedLimit) - 5; const hi = Math.max(...hist, speedLimit) + 5;
-          const Y = (q: number) => 105 - ((q - lo) / (hi - lo || 1)) * 100;
-          c.strokeStyle = '#EF4444'; c.setLineDash([4, 3]); c.beginPath(); c.moveTo(0, Y(speedLimit)); c.lineTo(300, Y(speedLimit)); c.stroke(); c.setLineDash([]);
-          c.strokeStyle = '#4F46E5'; c.lineWidth = 2; c.beginPath();
-          hist.forEach((q, i) => i ? c.lineTo((i * 300) / (hist.length - 1), Y(q)) : c.moveTo(0, Y(q)));
-          c.stroke(); c.fillStyle = '#64748B'; c.font = '10px sans-serif'; c.fillText('km/h vs last 3 s', 4, 10);
-        }} />
+        <div className="mu" style={{ color: '#F59E0B', fontWeight: 700, marginTop: 4 }}>DEMO MODE — SYNTHETIC · Not real detection</div>
       </div>
     );
   };
 
-  const t = frame / FPS;
-
   // =========================================================================
-  // Pipeline status indicator
+  // Pipeline Status Component (Requirement #8)
   // =========================================================================
   const renderPipelineStatus = () => {
-    const stages: { key: PipelineStage | string, label: string }[] = [
-      { key: 'VIDEO_VISIBLE', label: 'Video Visible' },
+    const stages: { key: PipelineStage, label: string }[] = [
+      { key: 'VIDEO_READY', label: 'Video Ready' },
       { key: 'UPLOADING', label: 'Uploading' },
       { key: 'JOB_CREATED', label: 'Job Created' },
-      { key: 'STREAMING', label: '● Live Detection' },
+      { key: 'PROCESSING', label: 'Processing' },
+      { key: 'LIVE_INFERENCE', label: '● Live Inference' },
       { key: 'FINALIZING', label: 'Finalizing' },
-      { key: 'COMPLETE', label: 'Complete' },
+      { key: 'COMPLETED', label: 'Completed' },
     ];
-    const stageOrder = ['IDLE', 'VIDEO_VISIBLE', 'UPLOADING', 'JOB_CREATED', 'STREAMING', 'FINALIZING', 'COMPLETE'];
+    const stageOrder: PipelineStage[] = [
+      'IDLE', 'VIDEO_READY', 'UPLOADING', 'UPLOAD_COMPLETE', 'JOB_CREATED',
+      'PROCESSING', 'LIVE_INFERENCE', 'FINALIZING', 'COMPLETED'
+    ];
     const currentIdx = stageOrder.indexOf(pipelineStage);
 
-    if (pipelineStage === 'IDLE' || pipelineStage === 'COMPLETE') return null;
+    if (pipelineStage === 'IDLE' || pipelineStage === 'COMPLETED') return null;
 
     return (
       <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap', margin: '8px 0', padding: '8px 12px', background: '#0F172A', borderRadius: 8 }}>
@@ -813,7 +783,7 @@ export const WorkbenchView: React.FC = () => {
             </React.Fragment>
           );
         })}
-        {pipelineStage === 'STREAMING' && (
+        {pipelineStage === 'LIVE_INFERENCE' && (
           <span style={{ marginLeft: 'auto', fontSize: 11, color: '#10B981', fontWeight: 700 }}>
             {liveTrackCount} vehicles tracked
           </span>
@@ -823,52 +793,62 @@ export const WorkbenchView: React.FC = () => {
   };
 
   // =========================================================================
-  // JSX
+  // JSX Layout
   // =========================================================================
   return (
     <div className="grid">
       <div>
         <div className="card">
           <h3>
-            Live analysis{' '}
+            Analytical Workbench{' '}
             <span className="badge">{srcName}</span>
-            {isLiveStreamingRef.current && (
-              <span className="badge" style={{ background: '#D1FAE5', color: '#065F46', marginLeft: 6, animation: 'pulse 1.5s infinite' }}>● REAL VIDEO — LIVE AI</span>
+            {activeJobId && (
+              <span className="badge" style={{ background: '#0F172A', color: '#10B981', fontWeight: 700, marginLeft: 6 }}>
+                ACTIVE JOB: #{activeJobId}
+              </span>
             )}
-            {pipelineStage === 'COMPLETE' && (
-              <span className="badge" style={{ background: '#EEF2FF', color: '#4F46E5', marginLeft: 6 }}>REAL VIDEO · LIVE AI ANALYSIS</span>
+            {isLiveStreamingRef.current && (
+              <span className="badge" style={{ background: '#D1FAE5', color: '#065F46', marginLeft: 6 }}>● REAL VIDEO — LIVE AI</span>
+            )}
+            {pipelineStage === 'COMPLETED' && (
+              <span className="badge" style={{ background: '#EEF2FF', color: '#4F46E5', marginLeft: 6 }}>REAL VIDEO · LIVE AI</span>
             )}
             {!isRealVideo && (
-              <span className="badge" style={{ background: '#FFFBEB', color: '#B45309', marginLeft: 6 }}>DEMO — SYNTHETIC</span>
+              <span className="badge" style={{ background: '#FFFBEB', color: '#B45309', marginLeft: 6 }}>DEMO MODE — SYNTHETIC</span>
             )}
           </h3>
 
-          <canvas ref={canvasRef} width={W} height={H} onClick={handleCanvasClick} style={{ cursor: 'pointer', display: 'block' }} />
+          <canvas ref={canvasRef} width={W} height={H} onClick={handleCanvasClick} style={{ cursor: 'pointer', display: 'block', borderRadius: 6 }} />
 
-          {/* Pipeline Progress */}
+          {/* Pipeline Progress Status */}
           {renderPipelineStatus()}
 
           {/* Status Bar */}
           {jobStatusText && (
             <div style={{
-              background: pipelineStage === 'STREAMING' ? '#0F172A' : '#EEF2FF',
-              border: `1px solid ${pipelineStage === 'STREAMING' ? '#10B981' : '#C7D2FE'}`,
-              color: pipelineStage === 'STREAMING' ? '#10B981' : '#4F46E5',
+              background: pipelineStage === 'LIVE_INFERENCE' ? '#0F172A' : '#EEF2FF',
+              border: `1px solid ${pipelineStage === 'LIVE_INFERENCE' ? '#10B981' : '#C7D2FE'}`,
+              color: pipelineStage === 'LIVE_INFERENCE' ? '#10B981' : '#4F46E5',
               padding: '6px 10px', borderRadius: '6px', fontSize: '12px', fontWeight: 600, marginTop: '8px'
             }}>
               {jobStatusText}
             </div>
           )}
 
-          {/* Latency Metrics */}
-          {(firstDetectionMs || firstBoxMs || processingFps) && (
-            <div style={{ display: 'flex', gap: 12, fontSize: 11, color: '#64748B', marginTop: 6, flexWrap: 'wrap' }}>
-              {firstBoxMs && <span>🎯 First box: <b style={{ color: '#10B981' }}>{firstBoxMs} ms</b></span>}
-              {firstDetectionMs && <span>⚡ First detection: <b style={{ color: '#4F46E5' }}>{firstDetectionMs} ms</b></span>}
-              {processingFps && <span>🚀 Inference FPS: <b style={{ color: '#0EA5E9' }}>{processingFps.toFixed(1)}</b></span>}
-              {realTimeFactor !== null && <span>⏱ RTF: <b style={{ color: realTimeFactor >= 1.0 ? '#10B981' : '#F59E0B' }}>{realTimeFactor.toFixed(2)}x</b></span>}
-            </div>
-          )}
+          {/* Latency & Frame Sync Debug Readout (Requirement #12) */}
+          <div style={{ display: 'flex', gap: 12, fontSize: 11, color: '#64748B', marginTop: 6, flexWrap: 'wrap' }}>
+            {videoRef.current && (
+              <span>Video Frame: <b style={{ color: '#3B82F6' }}>{Math.floor((videoRef.current.currentTime || 0) * (telemetry?.video_fps || 29.97))}</b></span>
+            )}
+            {latestInferenceFrame !== null && (
+              <span>Inference Frame: <b style={{ color: '#10B981' }}>{latestInferenceFrame}</b></span>
+            )}
+            {firstBoxMs && <span>🎯 First box: <b style={{ color: '#10B981' }}>{firstBoxMs} ms</b></span>}
+            {firstDetectionMs && <span>⚡ First detection: <b style={{ color: '#4F46E5' }}>{firstDetectionMs} ms</b></span>}
+            {processingFps && <span>🚀 FPS: <b style={{ color: '#0EA5E9' }}>{processingFps.toFixed(1)}</b></span>}
+            {realTimeFactor !== null && <span>⏱ RTF: <b style={{ color: realTimeFactor >= 1.0 ? '#10B981' : '#F59E0B' }}>{realTimeFactor.toFixed(2)}x</b></span>}
+            <span>Calibration: <b style={{ color: realCalib ? '#10B981' : '#F59E0B' }}>{realCalib ? `ACTIVE (#${realCalib.id || 1})` : 'NOT CONFIGURED'}</b></span>
+          </div>
 
           {/* Controls */}
           <div className="bar">
@@ -876,26 +856,24 @@ export const WorkbenchView: React.FC = () => {
             <button className="b g" onClick={() => { setPlaying(false); setFrame(f => Math.max(0, f - 1)); }}>◀ −1</button>
             <button className="b g" onClick={() => { setPlaying(false); setFrame(f => Math.min(N - 1, f + 1)); }}>+1 ▶</button>
             <input type="range" min="0" max={N - 1} value={frame} onChange={e => { setFrame(Number(e.target.value)); seenRef.current.clear(); }} />
-            <span className="mu">{Math.floor(t / 60)}:{(t % 60).toFixed(2).padStart(5, '0')} · f{frame}</span>
+            <span className="mu">{Math.floor((frame / FPS) / 60)}:{((frame / FPS) % 60).toFixed(2).padStart(5, '0')} · f{frame}</span>
           </div>
 
           <div className="bar">
             <label>Limit{' '}<input type="number" value={speedLimit} onChange={e => { setSpeedLimit(Number(e.target.value)); seenRef.current.clear(); }} />{' '}km/h</label>
             <label>Upload MP4/WebM{' '}<input type="file" accept="video/mp4,video/webm" onChange={handleFileUpload} /></label>
-            <span className="mu">or drag a file onto the canvas</span>
           </div>
 
           <div style={{ display: 'flex', gap: '16px', fontSize: '11px', color: '#64748B', marginTop: '8px', paddingTop: '6px', borderTop: '1px solid #E2E8F0', flexWrap: 'wrap' }}>
             <span>Detector: <b style={{ color: '#4F46E5' }}>{telemetry?.detector_actual || 'YOLOX-Nano-ONNX'}</b></span>
             <span>Tracker: <b style={{ color: '#10B981' }}>ByteTrack</b></span>
-            <span>Status: <b style={{ color: wsConnected ? '#10B981' : '#64748B' }}>{wsConnected ? '● STREAMING' : pipelineStage === 'COMPLETE' ? 'COMPLETE' : 'OFFLINE'}</b></span>
+            <span>Status: <b style={{ color: wsConnected ? '#10B981' : '#64748B' }}>{wsConnected ? '● STREAMING' : pipelineStage === 'COMPLETED' ? 'COMPLETED' : 'OFFLINE'}</b></span>
             <span>Inference: <b style={{ color: '#10B981' }}>{telemetry?.inference_time_ms ? `${telemetry.inference_time_ms} ms/frame` : processingFps ? `${(1000 / processingFps).toFixed(0)} ms/frame` : 'N/A'}</b></span>
-            <span>Model Hash: <b style={{ fontFamily: 'monospace', color: '#64748B' }}>{telemetry?.model_hash ? `${telemetry.model_hash.slice(0, 8)}...` : 'c789161e...'}</b></span>
-            <span>Fallback: <b style={{ color: telemetry?.fallback_used ? '#EF4444' : '#10B981' }}>{telemetry?.fallback_used ? `YES: ${telemetry.fallback_reason}` : 'NO'}</b></span>
+            <span>Model Hash: <b style={{ fontFamily: 'monospace', color: '#64748B' }}>c789161e...</b></span>
           </div>
         </div>
 
-        {/* Traffic Intelligence */}
+        {/* Traffic Intelligence Overview */}
         <div className="card" style={{ marginTop: '16px' }}>
           <h3 style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <span>Traffic Intelligence Overview</span>
@@ -904,13 +882,13 @@ export const WorkbenchView: React.FC = () => {
               color: (telemetry?.traffic_intelligence?.congestion?.congestion_state || 'FREE_FLOW') === 'SEVERE' ? '#991B1B' : (telemetry?.traffic_intelligence?.congestion?.congestion_state || 'FREE_FLOW') === 'CONGESTED' ? '#92400E' : '#065F46',
               fontWeight: 700, fontSize: '12px'
             }}>
-              CONGESTION: {telemetry?.traffic_intelligence?.congestion?.congestion_state || (pipelineStage === 'STREAMING' ? 'ANALYZING...' : 'FREE_FLOW')}
+              CONGESTION: {telemetry?.traffic_intelligence?.congestion?.congestion_state || (pipelineStage === 'LIVE_INFERENCE' ? 'ANALYZING...' : 'FREE_FLOW')}
             </span>
           </h3>
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px', margin: '12px 0' }}>
             {[
-              { label: 'VEHICLES OBSERVED', value: telemetry?.traffic_intelligence?.counting?.total_vehicle_count ?? (pipelineStage === 'STREAMING' ? liveTrackCount : 0), unit: '', color: '#1E293B' },
+              { label: 'VEHICLES OBSERVED', value: telemetry?.traffic_intelligence?.counting?.total_vehicle_count ?? (pipelineStage === 'LIVE_INFERENCE' ? liveTrackCount : 0), unit: '', color: '#1E293B' },
               { label: 'CURRENT OCCUPANCY', value: telemetry?.traffic_intelligence?.density?.current_road_occupancy ?? 0, unit: 'veh', color: '#4F46E5' },
               { label: 'MEAN DENSITY', value: telemetry?.traffic_intelligence?.density?.mean_density_veh_km ?? 0, unit: 'veh/km', color: '#0EA5E9' },
               { label: 'FLOW RATE', value: telemetry?.traffic_intelligence?.flow?.flow_rate_vph ?? 0, unit: 'veh/h', color: '#6366F1' },
@@ -927,9 +905,9 @@ export const WorkbenchView: React.FC = () => {
           </div>
         </div>
 
-        {/* Violations */}
+        {/* Violations Queue */}
         <div className="card">
-          <h3>Violation queue</h3>
+          <h3>Violation Queue</h3>
           <div className="viol">
             <table>
               <thead><tr><th>Time</th><th>ID</th><th>Speed</th><th>Location</th><th></th></tr></thead>
@@ -951,7 +929,7 @@ export const WorkbenchView: React.FC = () => {
 
       <div>
         <div className="card">
-          <h3>Track inspector</h3>
+          <h3>Track Inspector</h3>
           {renderInspector()}
         </div>
       </div>

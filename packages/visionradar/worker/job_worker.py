@@ -56,30 +56,36 @@ def drop_job_queue(job_id: int):
     _JOB_LOOP.pop(job_id, None)
 
 
+def _safe_put(queue: asyncio.Queue, message: dict):
+    """Safely put message into queue, dropping oldest visualization frame if full."""
+    is_viz = message.get("type") == "frame_result"
+    if queue.full():
+        if is_viz:
+            try:
+                queue.get_nowait()
+            except Exception:
+                pass
+        else:
+            return
+    try:
+        queue.put_nowait(message)
+    except Exception:
+        pass
+
+
 def _emit(job_id: int, message: dict):
     """
     Thread-safe push to the asyncio.Queue from a synchronous worker thread.
-    If the queue is full (backpressure), we drop the *oldest* visualization
-    frame result (never a status/completed/error message).
     """
     loop = _JOB_LOOP.get(job_id)
     queue = _JOB_QUEUES.get(job_id)
     if loop is None or queue is None:
         return
 
-    is_viz = message.get("type") == "frame_result"
-
-    if queue.full() and is_viz:
-        # Backpressure: discard oldest visualization frame
-        try:
-            _ = queue.get_nowait()
-        except Exception:
-            pass
-
     try:
-        loop.call_soon_threadsafe(queue.put_nowait, message)
+        loop.call_soon_threadsafe(_safe_put, queue, message)
     except Exception:
-        pass   # queue full race — skip silently for visualization frames
+        pass
 
 
 # ---------------------------------------------------------------------------

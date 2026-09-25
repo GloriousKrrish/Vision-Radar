@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../packages")))
 
-from visionradar.models.database import get_db
+from visionradar.models.database import get_db, SessionLocal
 from visionradar.models.init_db import create_tables
 from visionradar.models.entities import Project, Video, Calibration, ProcessingJob, Track, SpeedMeasurement, Violation, Evidence, Experiment
 from visionradar.cv.calibration import HomographyCalibrator
@@ -260,7 +260,7 @@ async def start_processing_job(video_id: int, payload: JobCreate, background_tas
 # WebSocket Real-Time Streaming Endpoint
 # ---------------------------------------------------------------------------
 @app.websocket("/api/v1/jobs/{job_id}/stream")
-async def websocket_job_stream(websocket: WebSocket, job_id: int, db: Session = Depends(get_db)):
+async def websocket_job_stream(websocket: WebSocket, job_id: int):
     """
     Real-time WebSocket stream for a specific job.
 
@@ -271,43 +271,43 @@ async def websocket_job_stream(websocket: WebSocket, job_id: int, db: Session = 
       {"type": "error", "message": "..."}
     """
     await websocket.accept()
-
-    # Verify job exists
-    job = db.query(ProcessingJob).filter(ProcessingJob.id == job_id).first()
-    if not job:
-        await websocket.send_json({"type": "error", "job_id": job_id, "message": "Job not found"})
-        await websocket.close()
-        return
-
-    # If job already completed (e.g. browser reconnecting), immediately notify.
-    if job.status == "SUCCEEDED":
-        await websocket.send_json({
-            "type": "completed",
-            "job_id": job_id,
-            "message": "Job already completed — fetch tracks via /api/v1/jobs/{job_id}/tracks",
-            "total_tracks": db.query(Track).filter(Track.job_id == job_id).count()
-        })
-        await websocket.close()
-        return
-
-    if job.status == "FAILED":
-        await websocket.send_json({
-            "type": "error",
-            "job_id": job_id,
-            "message": job.error_message or "Job failed"
-        })
-        await websocket.close()
-        return
-
-    # Get or create the queue for this job
-    loop = asyncio.get_event_loop()
-    queue = get_or_create_queue(job_id, loop)
+    db: Session = SessionLocal()
 
     try:
+        # Verify job exists
+        job = db.query(ProcessingJob).filter(ProcessingJob.id == job_id).first()
+        if not job:
+            await websocket.send_json({"type": "error", "job_id": job_id, "message": "Job not found"})
+            await websocket.close()
+            return
+
+        # If job already completed (e.g. browser reconnecting), immediately notify.
+        if job.status == "SUCCEEDED":
+            await websocket.send_json({
+                "type": "completed",
+                "job_id": job_id,
+                "message": "Job already completed — fetch tracks via /api/v1/jobs/{job_id}/tracks",
+                "total_tracks": db.query(Track).filter(Track.job_id == job_id).count()
+            })
+            await websocket.close()
+            return
+
+        if job.status == "FAILED":
+            await websocket.send_json({
+                "type": "error",
+                "job_id": job_id,
+                "message": job.error_message or "Job failed"
+            })
+            await websocket.close()
+            return
+
+        # Get or create the queue for this job
+        loop = asyncio.get_event_loop()
+        queue = get_or_create_queue(job_id, loop)
+
         while True:
             try:
                 # Wait for next message with a 30-second timeout
-                # (handles hung jobs without leaking the connection)
                 msg = await asyncio.wait_for(queue.get(), timeout=30.0)
                 await websocket.send_json(msg)
                 queue.task_done()
@@ -331,10 +331,13 @@ async def websocket_job_stream(websocket: WebSocket, job_id: int, db: Session = 
         except Exception:
             pass
     finally:
-        # Only clean up queue if the job is done (so reconnects still work while running)
-        db.refresh(job)
-        if job.status in ("SUCCEEDED", "FAILED"):
-            drop_job_queue(job_id)
+        try:
+            db.refresh(job)
+            if job.status in ("SUCCEEDED", "FAILED"):
+                drop_job_queue(job_id)
+        except Exception:
+            pass
+        db.close()
         try:
             await websocket.close()
         except Exception:
