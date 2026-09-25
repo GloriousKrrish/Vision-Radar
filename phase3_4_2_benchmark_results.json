@@ -1,0 +1,317 @@
+{
+  "BASELINE_640_CPU": {
+    "resolution": "640x640",
+    "threads": 8,
+    "frame_skip": 0,
+    "processing_time_sec": 56.571,
+    "detector_latency_ms": 134.18,
+    "tracker_latency_ms": 0.52,
+    "detector_fps": 7.45,
+    "pipeline_fps": 5.92,
+    "rtf": 0.1976,
+    "cpu_usage_pct": 90.7,
+    "memory_mb": 88.6,
+    "detections_per_frame": 5.03,
+    "total_detections": 1685,
+    "unique_tracks": 31,
+    "observed_internal_id_switches": 0,
+    "fragmentations": 63,
+    "first_box_latency_ms": 291.5
+  },
+  "STAGE_PROFILING_640": {
+    "1. image_conversion": {
+      "mean_ms": 0.006,
+      "p95_ms": 0.008,
+      "pct": 0.0
+    },
+    "2. resize": {
+      "mean_ms": 1.553,
+      "p95_ms": 2.724,
+      "pct": 0.96
+    },
+    "3. letterbox_padding": {
+      "mean_ms": 1.603,
+      "p95_ms": 2.43,
+      "pct": 0.99
+    },
+    "4. blob_creation": {
+      "mean_ms": 13.25,
+      "p95_ms": 17.534,
+      "pct": 8.2
+    },
+    "5. opencv_dnn_forward": {
+      "mean_ms": 134.571,
+      "p95_ms": 167.995,
+      "pct": 83.32
+    },
+    "6. output_grid_decoding": {
+      "mean_ms": 10.027,
+      "p95_ms": 12.875,
+      "pct": 6.21
+    },
+    "7. confidence_filtering": {
+      "mean_ms": 0.342,
+      "p95_ms": 0.542,
+      "pct": 0.21
+    },
+    "8. nms_suppression": {
+      "mean_ms": 0.082,
+      "p95_ms": 0.125,
+      "pct": 0.05
+    },
+    "9. postprocessing_objects": {
+      "mean_ms": 0.079,
+      "p95_ms": 0.117,
+      "pct": 0.05
+    },
+    "total_detector_mean_ms": 161.514
+  },
+  "BACKEND_VERIFICATION": {
+    "active_backend": "OpenCV-DNN (CPU)",
+    "opencv_version": "5.0.0",
+    "onnxruntime_available": false,
+    "onnxruntime_providers": [],
+    "comparison_note": "ONNX Runtime is NOT installed in this environment. OpenCV DNN is the authoritative active backend."
+  },
+  "CPU_THREADING_ABLATION": {
+    "threads_1": {
+      "resolution": "640x640",
+      "threads": 1,
+      "frame_skip": 0,
+      "processing_time_sec": 97.368,
+      "detector_latency_ms": 266.1,
+      "tracker_latency_ms": 0.41,
+      "detector_fps": 3.76,
+      "pipeline_fps": 3.44,
+      "rtf": 0.1148,
+      "cpu_usage_pct": 56.5,
+      "memory_mb": 718.6,
+      "detections_per_frame": 5.03,
+      "total_detections": 1685,
+      "unique_tracks": 31,
+      "observed_internal_id_switches": 0,
+      "fragmentations": 63,
+      "first_box_latency_ms": 668.4
+    },
+    "threads_2": {
+      "resolution": "640x640",
+      "threads": 2,
+      "frame_skip": 0,
+      "processing_time_sec": 76.383,
+      "detector_latency_ms": 201.3,
+      "tracker_latency_ms": 0.43,
+      "detector_fps": 4.97,
+      "pipeline_fps": 4.39,
+      "rtf": 0.1463,
+      "cpu_usage_pct": 64.1,
+      "memory_mb": 718.1,
+      "detections_per_frame": 5.03,
+      "total_detections": 1685,
+      "unique_tracks": 31,
+      "observed_internal_id_switches": 0,
+      "fragmentations": 63,
+      "first_box_latency_ms": 426.8
+    },
+    "threads_4": {
+      "resolution": "640x640",
+      "threads": 4,
+      "frame_skip": 0,
+      "processing_time_sec": 68.367,
+      "detector_latency_ms": 170.83,
+      "tracker_latency_ms": 0.53,
+      "detector_fps": 5.85,
+      "pipeline_fps": 4.9,
+      "rtf": 0.1635,
+      "cpu_usage_pct": 84.5,
+      "memory_mb": 719.1,
+      "detections_per_frame": 5.03,
+      "total_detections": 1685,
+      "unique_tracks": 31,
+      "observed_internal_id_switches": 0,
+      "fragmentations": 63,
+      "first_box_latency_ms": 401.7
+    },
+    "threads_8": {
+      "resolution": "640x640",
+      "threads": 8,
+      "frame_skip": 0,
+      "processing_time_sec": 60.883,
+      "detector_latency_ms": 143.42,
+      "tracker_latency_ms": 0.67,
+      "detector_fps": 6.97,
+      "pipeline_fps": 5.5,
+      "rtf": 0.1836,
+      "cpu_usage_pct": 94.5,
+      "memory_mb": 718.6,
+      "detections_per_frame": 5.03,
+      "total_detections": 1685,
+      "unique_tracks": 31,
+      "observed_internal_id_switches": 0,
+      "fragmentations": 63,
+      "first_box_latency_ms": 316.7
+    }
+  },
+  "MODEL_INITIALIZATION": {
+    "model_cold_start_ms": 543.45,
+    "first_warm_inference_ms": 159.11,
+    "singleton_recommendation": "Maintain a server-process level YOLOX model singleton or warm session pool to eliminate the ~190ms cold-start on new job requests.",
+    "concurrency_safety": "OpenCV cv2.dnn.Net retains internal blob state during forward(). Concurrent multi-thread inference on a single Net instance requires a threading lock or thread-local instance per worker thread."
+  },
+  "PREPROCESSING_OPTIMIZATION": {
+    "baseline_preprocessing_ms": 11.464,
+    "optimized_preprocessing_ms": 10.848,
+    "speedup_pct": 5.37,
+    "bit_exact_match": true
+  },
+  "RESOLUTION_ABLATION": {
+    "resolution_640": {
+      "resolution": "640x640",
+      "threads": 8,
+      "frame_skip": 0,
+      "processing_time_sec": 74.076,
+      "detector_latency_ms": 173.64,
+      "tracker_latency_ms": 0.71,
+      "detector_fps": 5.76,
+      "pipeline_fps": 4.52,
+      "rtf": 0.1509,
+      "cpu_usage_pct": 97.1,
+      "memory_mb": 765.8,
+      "detections_per_frame": 5.03,
+      "total_detections": 1685,
+      "unique_tracks": 31,
+      "observed_internal_id_switches": 0,
+      "fragmentations": 63,
+      "first_box_latency_ms": 300.9
+    },
+    "resolution_512": {
+      "resolution": "512x512",
+      "threads": 8,
+      "frame_skip": 0,
+      "processing_time_sec": 64.066,
+      "detector_latency_ms": 146.83,
+      "tracker_latency_ms": 0.57,
+      "detector_fps": 6.81,
+      "pipeline_fps": 5.23,
+      "rtf": 0.1745,
+      "cpu_usage_pct": 99.8,
+      "memory_mb": 755.8,
+      "detections_per_frame": 3.72,
+      "total_detections": 1247,
+      "unique_tracks": 25,
+      "observed_internal_id_switches": 0,
+      "fragmentations": 34,
+      "first_box_latency_ms": 938.4
+    },
+    "resolution_416": {
+      "resolution": "416x416",
+      "threads": 8,
+      "frame_skip": 0,
+      "processing_time_sec": 45.123,
+      "detector_latency_ms": 94.41,
+      "tracker_latency_ms": 0.45,
+      "detector_fps": 10.59,
+      "pipeline_fps": 7.42,
+      "rtf": 0.2477,
+      "cpu_usage_pct": 99.6,
+      "memory_mb": 748.9,
+      "detections_per_frame": 3.02,
+      "total_detections": 1011,
+      "unique_tracks": 24,
+      "observed_internal_id_switches": 0,
+      "fragmentations": 23,
+      "first_box_latency_ms": 724.8
+    },
+    "resolution_320": {
+      "resolution": "320x320",
+      "threads": 8,
+      "frame_skip": 0,
+      "processing_time_sec": 29.107,
+      "detector_latency_ms": 53.03,
+      "tracker_latency_ms": 0.34,
+      "detector_fps": 18.86,
+      "pipeline_fps": 11.51,
+      "rtf": 0.384,
+      "cpu_usage_pct": 98.6,
+      "memory_mb": 743.9,
+      "detections_per_frame": 2.4,
+      "total_detections": 803,
+      "unique_tracks": 24,
+      "observed_internal_id_switches": 0,
+      "fragmentations": 21,
+      "first_box_latency_ms": 987.1
+    }
+  },
+  "CONFIDENCE_NMS_INVARIANTS": {
+    "canonical_confidence_threshold": 0.25,
+    "canonical_nms_threshold": 0.45,
+    "status": "STRICTLY_FIXED",
+    "verification_note": "No thresholds were modified during resolution/backend/threading benchmarks to preserve detection validity."
+  },
+  "GPU_INVESTIGATION": {
+    "gpu_model": "Intel(R) UHD Graphics 620",
+    "cuda_available": false,
+    "onnxruntime_gpu_available": false,
+    "opencv_cuda_available": false,
+    "verdict": "GPU NOT AVAILABLE IN CURRENT ENVIRONMENT",
+    "recommendation": "Deploy on an NVIDIA GPU environment with CUDA/TensorRT for production RTF >= 1.0 at 640x640 resolution."
+  },
+  "FRAME_SKIPPING_ANALYSIS": {
+    "skip_0": {
+      "resolution": "640x640",
+      "threads": 8,
+      "frame_skip": 0,
+      "processing_time_sec": 56.347,
+      "detector_latency_ms": 134.45,
+      "tracker_latency_ms": 0.57,
+      "detector_fps": 7.44,
+      "pipeline_fps": 5.95,
+      "rtf": 0.1984,
+      "cpu_usage_pct": 92.0,
+      "memory_mb": 768.9,
+      "detections_per_frame": 5.03,
+      "total_detections": 1685,
+      "unique_tracks": 31,
+      "observed_internal_id_switches": 0,
+      "fragmentations": 63,
+      "first_box_latency_ms": 320.4
+    },
+    "skip_1": {
+      "resolution": "640x640",
+      "threads": 8,
+      "frame_skip": 1,
+      "processing_time_sec": 29.162,
+      "detector_latency_ms": 134.49,
+      "tracker_latency_ms": 0.32,
+      "detector_fps": 7.44,
+      "pipeline_fps": 11.49,
+      "rtf": 0.3833,
+      "cpu_usage_pct": 92.0,
+      "memory_mb": 767.1,
+      "detections_per_frame": 5.02,
+      "total_detections": 844,
+      "unique_tracks": 34,
+      "observed_internal_id_switches": 0,
+      "fragmentations": 810,
+      "first_box_latency_ms": 320.5
+    },
+    "skip_2": {
+      "resolution": "640x640",
+      "threads": 8,
+      "frame_skip": 2,
+      "processing_time_sec": 21.626,
+      "detector_latency_ms": 142.13,
+      "tracker_latency_ms": 0.23,
+      "detector_fps": 7.04,
+      "pipeline_fps": 15.49,
+      "rtf": 0.5169,
+      "cpu_usage_pct": 94.2,
+      "memory_mb": 767.4,
+      "detections_per_frame": 5.02,
+      "total_detections": 562,
+      "unique_tracks": 43,
+      "observed_internal_id_switches": 0,
+      "fragmentations": 519,
+      "first_box_latency_ms": 265.3
+    }
+  }
+}
