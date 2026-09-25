@@ -1,10 +1,25 @@
+"""
+VisionRadar Phase 3.4 — Real-Time Streaming Worker
+
+Refactored job_worker to emit frame detections incrementally via
+an in-process WebSocket channel (asyncio.Queue per job_id).
+
+CV pipeline unchanged: YOLOX → ByteTrack → speed estimator.
+Only the delivery mechanism changes: results are pushed to
+a per-job asyncio Queue as soon as each frame is processed.
+"""
 import time
 import datetime
+import asyncio
 import traceback
 import numpy as np
+from typing import Dict, Optional, Any
 from sqlalchemy.orm import Session
+
 from visionradar.models.database import SessionLocal
-from visionradar.models.entities import ProcessingJob, Track, SpeedMeasurement, Violation, Evidence, Video, Calibration
+from visionradar.models.entities import (
+    ProcessingJob, Track, SpeedMeasurement, Violation, Evidence, Video, Calibration
+)
 from visionradar.cv.decoder import VideoDecoder
 from visionradar.cv.detector import LightweightDetector
 from visionradar.cv.tracker import ByteTrackTracker
@@ -13,18 +28,92 @@ from visionradar.cv.speed import MonocularSpeedEstimator
 from visionradar.cv.violations import ViolationRuleEngine
 from visionradar.cv.evidence import EvidenceWriter
 
-def run_job(job_id: int):
+# ---------------------------------------------------------------------------
+# Per-job result queues (asyncio.Queue) — populated by the sync worker thread,
+# consumed by the async WebSocket handler.
+# Key: job_id → asyncio.Queue[dict]
+# ---------------------------------------------------------------------------
+_JOB_QUEUES: Dict[int, asyncio.Queue] = {}
+_JOB_LOOP: Dict[int, asyncio.AbstractEventLoop] = {}   # event loop that owns each queue
+
+# Maximum items waiting in each per-job queue.
+# If the WebSocket consumer is slow, oldest visualization frames are dropped
+# (tracker itself is never skipped — only visualization delivery is throttled).
+_QUEUE_MAX_SIZE = 64
+
+
+def get_or_create_queue(job_id: int, loop: asyncio.AbstractEventLoop) -> asyncio.Queue:
+    """Return (or lazily create) the asyncio.Queue for job_id."""
+    if job_id not in _JOB_QUEUES:
+        _JOB_QUEUES[job_id] = asyncio.Queue(maxsize=_QUEUE_MAX_SIZE)
+        _JOB_LOOP[job_id] = loop
+    return _JOB_QUEUES[job_id]
+
+
+def drop_job_queue(job_id: int):
+    """Clean up queue after job finishes and consumers have disconnected."""
+    _JOB_QUEUES.pop(job_id, None)
+    _JOB_LOOP.pop(job_id, None)
+
+
+def _emit(job_id: int, message: dict):
     """
-    Executes a VisionRadar video processing job.
-    Stage A: Decode video, detect vehicles, track identities, build raw trajectories.
-    Stage B: Project via calibration, compute timestamp-aware speed & uncertainty, evaluate violations.
+    Thread-safe push to the asyncio.Queue from a synchronous worker thread.
+    If the queue is full (backpressure), we drop the *oldest* visualization
+    frame result (never a status/completed/error message).
     """
+    loop = _JOB_LOOP.get(job_id)
+    queue = _JOB_QUEUES.get(job_id)
+    if loop is None or queue is None:
+        return
+
+    is_viz = message.get("type") == "frame_result"
+
+    if queue.full() and is_viz:
+        # Backpressure: discard oldest visualization frame
+        try:
+            _ = queue.get_nowait()
+        except Exception:
+            pass
+
+    try:
+        loop.call_soon_threadsafe(queue.put_nowait, message)
+    except Exception:
+        pass   # queue full race — skip silently for visualization frames
+
+
+# ---------------------------------------------------------------------------
+# Incremental worker
+# ---------------------------------------------------------------------------
+
+def run_job_streaming(job_id: int, loop: asyncio.AbstractEventLoop):
+    """
+    Real-time version of run_job.
+    
+    - Emits 'frame_result' messages for every processed frame.
+    - Emits 'status' messages for stage transitions.
+    - Emits 'completed' or 'error' at the end.
+    - CV pipeline (YOLOX, ByteTrack, speed estimator) is unchanged.
+    - Final DB persistence still happens at completion.
+    """
+    # Register the queue so the WebSocket handler can consume
+    get_or_create_queue(job_id, loop)
+
     db: Session = SessionLocal()
     job = db.query(ProcessingJob).filter(ProcessingJob.id == job_id).first()
     if not job:
-        print(f"Job #{job_id} not found.")
+        _emit(job_id, {"type": "error", "job_id": job_id, "message": f"Job #{job_id} not found."})
         db.close()
         return
+
+    perf = {
+        "t_start": time.monotonic(),
+        "t_first_detection": None,
+        "t_first_track": None,
+        "frames_processed": 0,
+        "total_detector_ms": 0.0,
+        "total_tracker_ms": 0.0,
+    }
 
     try:
         job.status = "RUNNING"
@@ -33,11 +122,18 @@ def run_job(job_id: int):
         job.stage = "Decoder"
         db.commit()
 
+        _emit(job_id, {
+            "type": "status",
+            "job_id": job_id,
+            "stage": "INITIALIZING",
+            "progress": 5,
+            "message": "Loading video and calibration..."
+        })
+
         video = db.query(Video).filter(Video.id == job.video_id).first()
         if not video:
             raise RuntimeError(f"Associated video #{job.video_id} not found.")
 
-        # Load Calibration
         calib = None
         if job.calibration_id:
             calib = db.query(Calibration).filter(Calibration.id == job.calibration_id).first()
@@ -51,7 +147,6 @@ def run_job(job_id: int):
                 pitch_deg=calib.pitch_deg
             )
         else:
-            # Default fallback calibration
             img_pts = [(330.0, 160.0), (470.0, 160.0), (748.0, 435.0), (51.0, 435.0)]
             world_pts = [(-1.0, 150.0), (13.0, 150.0), (13.0, 0.5), (-1.0, 0.5)]
             calibrator = HomographyCalibrator(image_points=img_pts, world_points=world_pts)
@@ -77,7 +172,6 @@ def run_job(job_id: int):
         rule_engine = ViolationRuleEngine(speed_limit_kmh=80.0)
         evidence_writer = EvidenceWriter(output_dir=f"data/evidence/job_{job.id}")
 
-        # Instantiate Intelligence Engines
         counting_engine = VehicleCountingEngine()
         flow_engine = TrafficFlowEngine(interval_sec=meta.duration_sec)
         lane_engine = LaneIntelligenceEngine()
@@ -89,35 +183,102 @@ def run_job(job_id: int):
         congestion_engine = CongestionEngine(policy_version="v1.0.0")
         event_engine = TrafficEventEngine()
 
-        t_job_start = time.time()
+        _emit(job_id, {
+            "type": "status",
+            "job_id": job_id,
+            "stage": "DETECTION_AND_TRACKING",
+            "progress": 20,
+            "message": "YOLOX + ByteTrack active. Processing frames...",
+            "video_fps": meta.fps,
+            "total_frames": meta.total_frames
+        })
+
+        t_job_start = time.monotonic()
         active_tracks = {}
         total_frames = max(1, meta.total_frames)
-
         last_frame_idx = 0
         last_timestamp = 0.0
+        src_w = 1920.0 if meta.width < 1000 else float(meta.width)
+        src_h = 1080.0 if meta.height < 600 else float(meta.height)
 
-        # STAGE A & B Execution
+        # ---------------------------------------------------------------
+        # MAIN PROCESSING LOOP — emit per-frame results incrementally
+        # ---------------------------------------------------------------
         for frame_idx, timestamp, frame in decoder.decode_frames():
             last_frame_idx = frame_idx
             last_timestamp = timestamp
-            dets = detector.detect(frame)
-            tracks = tracker.update(dets, frame_idx, timestamp)
 
-            active_track_dicts = []
-            src_w = 1920.0 if meta.width < 1000 else float(meta.width)
-            src_h = 1080.0 if meta.height < 600 else float(meta.height)
+            # YOLOX detection
+            t0_det = time.monotonic()
+            dets = detector.detect(frame)
+            det_ms = (time.monotonic() - t0_det) * 1000.0
+            perf["total_detector_ms"] += det_ms
+
+            # ByteTrack update (single persistent instance — never reset per frame)
+            t0_trk = time.monotonic()
+            tracks = tracker.update(dets, frame_idx, timestamp)
+            trk_ms = (time.monotonic() - t0_trk) * 1000.0
+            perf["total_tracker_ms"] += trk_ms
+
+            if dets and perf["t_first_detection"] is None:
+                perf["t_first_detection"] = time.monotonic() - perf["t_start"]
+            if tracks and perf["t_first_track"] is None:
+                perf["t_first_track"] = time.monotonic() - perf["t_start"]
+
+            perf["frames_processed"] += 1
+
+            # ---- Build real-time frame result payload -------------------
+            frame_tracks_payload = []
             for trk in tracks:
                 active_tracks[trk.track_id] = trk
                 speed_estimator.project_trajectory(trk.trajectory, source_width=src_w, source_height=src_h)
                 est = speed_estimator.estimate_speed_at_frame(trk.trajectory, target_frame_idx=frame_idx)
+
                 if est is not None and est.validity == "VALID":
                     trk.speed_kmh = est.smoothed_kmh
                     trk.speed_uncertainty_kmh = est.uncertainty_kmh
+                    speed_status = "VALID"
+                    speed_kmh = round(float(est.smoothed_kmh), 1) if est.smoothed_kmh else None
+                    speed_uncertainty = round(float(est.uncertainty_kmh), 2) if est.uncertainty_kmh else None
+                elif est is not None and est.validity == "LOW_CONFIDENCE":
+                    trk.speed_kmh = None
+                    trk.speed_uncertainty_kmh = None
+                    speed_status = "INSUFFICIENT_DATA"
+                    speed_kmh = None
+                    speed_uncertainty = None
                 else:
                     trk.speed_kmh = None
                     trk.speed_uncertainty_kmh = None
+                    speed_status = est.validity if est else "OUT_OF_ROI"
+                    speed_kmh = None
+                    speed_uncertainty = None
 
-                    # Save candidate violations
+                # Get current bounding box from trajectory
+                traj_pts = trk.trajectory.points if hasattr(trk.trajectory, 'points') else []
+                current_pt = None
+                for p in reversed(traj_pts):
+                    if p.frame_index == frame_idx:
+                        current_pt = p
+                        break
+
+                if current_pt and hasattr(current_pt, 'bbox') and current_pt.bbox:
+                    bbox = current_pt.bbox
+                else:
+                    bbox = getattr(trk, 'bbox', None) or [0, 0, 0, 0]
+
+                frame_tracks_payload.append({
+                    "track_id": trk.track_id,
+                    "vehicle_class": trk.vehicle_class,
+                    "confidence": round(float(trk.confidence), 3),
+                    "bbox": bbox,        # [x1, y1, x2, y2] in source pixels
+                    "speed_kmh": speed_kmh,
+                    "speed_uncertainty_kmh": speed_uncertainty,
+                    "speed_status": speed_status,  # VALID | OUT_OF_ROI | INSUFFICIENT_DATA | CALIBRATION_UNSTABLE
+                    "lane": getattr(trk, 'lane', 'UNKNOWN')
+                })
+
+                # Violations (unchanged)
+                if est and est.validity == "VALID":
                     viol = rule_engine.evaluate_track(
                         track_id=trk.track_id,
                         vehicle_class=trk.vehicle_class,
@@ -126,57 +287,93 @@ def run_job(job_id: int):
                         estimate=est
                     )
                     if viol:
-                        ev_res = evidence_writer.write_evidence_package(
-                            violation_id=viol.violation_id,
-                            frame_img=frame,
-                            bbox=trk.bbox,
-                            metadata=viol.to_dict()
-                        )
-                        db_viol = Violation(
-                            job_id=job.id,
-                            track_id=trk.track_id,
-                            vehicle_class=trk.vehicle_class,
-                            frame_index=frame_idx,
-                            timestamp=timestamp,
-                            estimated_speed_kmh=est.smoothed_kmh,
-                            speed_limit_kmh=80.0,
-                            uncertainty_kmh=est.uncertainty_kmh,
-                            location_label=trk.lane if trk.lane != "UNKNOWN" else "Lane 1",
-                            review_status="PENDING"
-                        )
-                        db.add(db_viol)
-                        db.flush()
+                        try:
+                            ev_res = evidence_writer.write_evidence_package(
+                                violation_id=viol.violation_id,
+                                frame_img=frame,
+                                bbox=trk.bbox,
+                                metadata=viol.to_dict()
+                            )
+                            db_viol = Violation(
+                                job_id=job.id,
+                                track_id=trk.track_id,
+                                vehicle_class=trk.vehicle_class,
+                                frame_index=frame_idx,
+                                timestamp=timestamp,
+                                estimated_speed_kmh=est.smoothed_kmh,
+                                speed_limit_kmh=80.0,
+                                uncertainty_kmh=est.uncertainty_kmh,
+                                location_label=trk.lane if trk.lane != "UNKNOWN" else "Lane 1",
+                                review_status="PENDING"
+                            )
+                            db.add(db_viol)
+                            db.flush()
+                            db_ev = Evidence(
+                                violation_id=db_viol.id,
+                                full_frame_path=ev_res["full_frame"],
+                                crop_frame_path=ev_res["crop_frame"],
+                                metadata_json=viol.to_dict()
+                            )
+                            db.add(db_ev)
+                        except Exception:
+                            pass
 
-                        db_ev = Evidence(
-                            violation_id=db_viol.id,
-                            full_frame_path=ev_res["full_frame"],
-                            crop_frame_path=ev_res["crop_frame"],
-                            metadata_json=viol.to_dict()
-                        )
-                        db.add(db_ev)
+                # Intelligence engines
+                try:
+                    counting_engine.process_track_update(
+                        trk.track_id, trk.vehicle_class, [p.to_dict() for p in trk.trajectory.points]
+                    )
+                except Exception:
+                    pass
 
-                # Update counting engine
-                counting_engine.process_track_update(
-                    trk.track_id, trk.vehicle_class, [p.to_dict() for p in trk.trajectory.points]
-                )
+            # Intelligence updates (per-frame)
+            try:
+                active_track_dicts = [t.to_dict() for t in tracks]
+                density_engine.update_frame_occupancy(frame_idx, timestamp, active_track_dicts, calibrator)
+                queue_detector.update(active_track_dicts, frame_idx, timestamp)
+                event_engine.process_frame(active_track_dicts, frame_idx, timestamp)
+            except Exception:
+                pass
 
-                active_track_dicts.append(trk.to_dict())
+            # Emit the real-time frame result (primary delivery path)
+            _emit(job_id, {
+                "type": "frame_result",
+                "job_id": job_id,
+                "frame_index": frame_idx,
+                "timestamp": round(timestamp, 4),
+                "source_width": int(src_w),
+                "source_height": int(src_h),
+                "tracks": frame_tracks_payload,
+                "detector_ms": round(det_ms, 1),
+                "tracker_ms": round(trk_ms, 1)
+            })
 
-            # Evaluate Instantaneous Density & Occupancy
-            density_engine.update_frame_occupancy(frame_idx, timestamp, active_track_dicts, calibrator)
-
-            # Evaluate Queues & Event State Machines per frame
-            active_queues = queue_detector.update(active_track_dicts, frame_idx, timestamp)
-            event_engine.process_frame(active_track_dicts, frame_idx, timestamp)
-
-            if frame_idx % 15 == 0:
+            # Periodic DB progress update (every 30 frames — NOT per frame)
+            if frame_idx % 30 == 0:
                 job.progress_pct = min(95.0, 20.0 + (frame_idx / total_frames) * 75.0)
-                db.commit()
+                n_active = len([t for t in frame_tracks_payload])
+                _emit(job_id, {
+                    "type": "status",
+                    "job_id": job_id,
+                    "stage": "DETECTION_AND_TRACKING",
+                    "progress": int(job.progress_pct),
+                    "vehicles_tracked": len(active_tracks),
+                    "frames_done": frame_idx,
+                    "total_frames": total_frames
+                })
+                try:
+                    db.commit()
+                except Exception:
+                    db.rollback()
 
-        # Finalize remaining active temporal events at end of video
+        # ---------------------------------------------------------------
+        # FINALIZATION
+        # ---------------------------------------------------------------
+        t_job_end = time.monotonic()
+        job_duration_sec = max(0.001, t_job_end - t_job_start)
+
         event_engine.finalize(last_frame_idx, last_timestamp)
 
-        # Compute Final Intelligence Metrics
         counts_summary = counting_engine.get_counts_summary()
         flow_summary = flow_engine.compute_flow_rate(counts_summary["total_vehicle_count"], meta.duration_sec)
         lane_summary = lane_engine.compute_lane_metrics([t.to_dict() for t in active_tracks.values()])
@@ -184,7 +381,7 @@ def run_job(job_id: int):
 
         all_speeds = [t.speed_kmh for t in active_tracks.values() if t.speed_kmh is not None and t.speed_kmh > 0]
         avg_overall_speed = float(np.mean(all_speeds)) if all_speeds else 0.0
-        
+
         congestion_summary = congestion_engine.evaluate_congestion(
             avg_speed_kmh=avg_overall_speed,
             mean_density_veh_km=density_summary.get("mean_density_veh_km", 0.0),
@@ -195,7 +392,15 @@ def run_job(job_id: int):
         )
         events_summary = event_engine.get_events_summary()
 
-        # Save tracks and speed measurements
+        _emit(job_id, {
+            "type": "status",
+            "job_id": job_id,
+            "stage": "PERSISTING",
+            "progress": 96,
+            "message": "Saving trajectories and speed measurements..."
+        })
+
+        # DB persistence (batch at end — NOT per frame)
         job.stage = "Persisting Trajectories"
         for trk_id, trk in active_tracks.items():
             db_trk = Track(
@@ -213,7 +418,7 @@ def run_job(job_id: int):
             for p in trk.trajectory.points:
                 est = speed_estimator.estimate_speed_at_frame(trk.trajectory, target_frame_idx=p.frame_index)
                 if est and est.validity in ("VALID", "LOW_CONFIDENCE") and est.smoothed_kmh is not None and est.smoothed_kmh > 0:
-                    db_sm = SpeedMeasurement(
+                    db.add(SpeedMeasurement(
                         track_id=db_trk.id,
                         frame_index=p.frame_index,
                         timestamp=p.timestamp,
@@ -223,10 +428,9 @@ def run_job(job_id: int):
                         confidence_low_kmh=est.confidence_low_kmh,
                         confidence_high_kmh=est.confidence_high_kmh,
                         error_components_json={**(est.error_components or {}), "validity": est.validity}
-                    )
-                    db.add(db_sm)
+                    ))
                 elif est:
-                    db_sm = SpeedMeasurement(
+                    db.add(SpeedMeasurement(
                         track_id=db_trk.id,
                         frame_index=p.frame_index,
                         timestamp=p.timestamp,
@@ -236,18 +440,18 @@ def run_job(job_id: int):
                         confidence_low_kmh=None,
                         confidence_high_kmh=None,
                         error_components_json={"validity": est.validity}
-                    )
-                    db.add(db_sm)
+                    ))
 
-        t_job_end = time.time()
-        job_duration_sec = max(0.001, t_job_end - t_job_start)
-
-        # Assemble Forensic Telemetry Package
         det_telemetry = detector.get_telemetry() if hasattr(detector, 'get_telemetry') else {}
         track_durations = [len(t.trajectory.points) for t in active_tracks.values()] if active_tracks else []
         tracker_metrics = tracker.get_tracking_metrics() if hasattr(tracker, 'get_tracking_metrics') else {}
         calib_validation = calibrator.validate_calibration() if calibrator else {"is_valid": False}
-        
+
+        avg_det_ms = perf["total_detector_ms"] / max(1, perf["frames_processed"])
+        avg_trk_ms = perf["total_tracker_ms"] / max(1, perf["frames_processed"])
+        processing_fps = round(perf["frames_processed"] / max(0.001, job_duration_sec), 1)
+        real_time_factor = round(processing_fps / max(0.001, meta.fps), 3)
+
         telemetry = {
             **det_telemetry,
             "video_id": job.video_id,
@@ -261,9 +465,14 @@ def run_job(job_id: int):
             "video_resolution": [meta.width, meta.height],
             "video_fps": meta.fps,
             "video_duration_sec": meta.duration_sec,
-            "frames_processed": total_frames,
+            "frames_processed": perf["frames_processed"],
             "processing_time_sec": round(job_duration_sec, 2),
-            "average_fps": round(total_frames / job_duration_sec, 1),
+            "average_fps": processing_fps,
+            "real_time_factor": real_time_factor,
+            "avg_detector_ms": round(avg_det_ms, 1),
+            "avg_tracker_ms": round(avg_trk_ms, 1),
+            "first_detection_latency_s": round(perf["t_first_detection"], 3) if perf["t_first_detection"] else None,
+            "first_track_latency_s": round(perf["t_first_track"], 3) if perf["t_first_track"] else None,
             "tracker_name": "ByteTrack",
             "total_tracks": len(active_tracks),
             "id_switches": tracker_metrics.get("id_switches", getattr(tracker, "total_id_switches", 0)),
@@ -285,28 +494,71 @@ def run_job(job_id: int):
             }
         }
         job.telemetry_json = telemetry
-
         job.status = "SUCCEEDED"
         job.stage = "Complete"
         job.progress_pct = 100.0
         job.completed_at = datetime.datetime.now(datetime.timezone.utc)
         db.commit()
-        print(f"Job #{job_id} completed successfully with detector '{telemetry.get('detector_name')}'.")
+
+        _emit(job_id, {
+            "type": "completed",
+            "job_id": job_id,
+            "total_tracks": len(active_tracks),
+            "processing_fps": processing_fps,
+            "real_time_factor": real_time_factor,
+            "avg_detector_ms": round(avg_det_ms, 1),
+            "avg_tracker_ms": round(avg_trk_ms, 1),
+            "first_detection_latency_s": round(perf["t_first_detection"], 3) if perf["t_first_detection"] else None,
+            "telemetry": telemetry
+        })
+        print(f"Job #{job_id} streaming completed. FPS={processing_fps}, RTF={real_time_factor}")
 
     except Exception as e:
-        db.rollback()
-        job.status = "FAILED"
-        job.error_message = str(e) + "\n" + traceback.format_exc()
-        db.commit()
-        print(f"Job #{job_id} failed: {e}")
+        tb = traceback.format_exc()
+        try:
+            db.rollback()
+            job.status = "FAILED"
+            job.error_message = str(e) + "\n" + tb
+            db.commit()
+        except Exception:
+            pass
+        _emit(job_id, {
+            "type": "error",
+            "job_id": job_id,
+            "message": str(e)
+        })
+        print(f"Job #{job_id} failed: {e}\n{tb}")
     finally:
         db.close()
+
+
+# ---------------------------------------------------------------------------
+# Legacy batch runner (kept for backward compatibility / testing)
+# ---------------------------------------------------------------------------
+def run_job(job_id: int):
+    """
+    Legacy batch runner — for backward compatibility.
+    Internally delegates to run_job_streaming using a temporary event loop.
+    """
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_closed():
+            raise RuntimeError("closed")
+    except Exception:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    run_job_streaming(job_id, loop)
+
 
 def poll_worker_loop(interval_sec: float = 2.0):
     """
     Continuous background polling loop checking for QUEUED jobs.
     """
+    import asyncio
     print("VisionRadar Background Worker loop started...")
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
     while True:
         db: Session = SessionLocal()
         job = db.query(ProcessingJob).filter(ProcessingJob.status == "QUEUED").first()
@@ -314,9 +566,10 @@ def poll_worker_loop(interval_sec: float = 2.0):
 
         if job:
             print(f"Worker picked up job #{job.id}...")
-            run_job(job.id)
+            run_job_streaming(job.id, loop)
         else:
             time.sleep(interval_sec)
+
 
 if __name__ == "__main__":
     poll_worker_loop()

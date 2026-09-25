@@ -1,9 +1,12 @@
 import os
 import sys
+import json
+import asyncio
 import hashlib
 import uuid
+import threading
 from typing import List, Optional
-from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Request, Header, status, BackgroundTasks
+from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Request, Header, status, BackgroundTasks, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -18,7 +21,7 @@ from visionradar.models.init_db import create_tables
 from visionradar.models.entities import Project, Video, Calibration, ProcessingJob, Track, SpeedMeasurement, Violation, Evidence, Experiment
 from visionradar.cv.calibration import HomographyCalibrator
 from visionradar.cv.analytics import TrafficAnalyticsEngine
-from visionradar.worker.job_worker import run_job
+from visionradar.worker.job_worker import run_job, run_job_streaming, get_or_create_queue, drop_job_queue
 from visionradar.services.pdf_report import PDFReportGenerator
 from apps.api.schemas import (
     ProjectCreate, ProjectResponse,
@@ -211,7 +214,7 @@ def list_calibrations(video_id: int, db: Session = Depends(get_db)):
 
 # --- Jobs API ---
 @app.post("/api/v1/videos/{video_id}/jobs", response_model=JobResponse)
-def start_processing_job(video_id: int, payload: JobCreate, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+async def start_processing_job(video_id: int, payload: JobCreate, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     video = db.query(Video).filter(Video.id == video_id).first()
     if not video:
         raise HTTPException(status_code=404, detail="Video not found")
@@ -228,8 +231,18 @@ def start_processing_job(video_id: int, payload: JobCreate, background_tasks: Ba
     db.commit()
     db.refresh(job)
 
-    # Trigger background worker task
-    background_tasks.add_task(run_job, job.id)
+    # Capture the current event loop and register the queue BEFORE the thread starts
+    # so the WebSocket handler can find it even if it connects immediately.
+    loop = asyncio.get_event_loop()
+    get_or_create_queue(job.id, loop)
+
+    # Run CV inference in a background thread (non-blocking for the async server)
+    def _run_in_thread():
+        run_job_streaming(job.id, loop)
+
+    thread = threading.Thread(target=_run_in_thread, daemon=True, name=f"job-{job.id}")
+    thread.start()
+
     return JobResponse(
         id=job.id,
         video_id=job.video_id,
@@ -241,6 +254,91 @@ def start_processing_job(video_id: int, payload: JobCreate, background_tasks: Ba
         telemetry=job.telemetry_json,
         created_at=job.created_at
     )
+
+
+# ---------------------------------------------------------------------------
+# WebSocket Real-Time Streaming Endpoint
+# ---------------------------------------------------------------------------
+@app.websocket("/api/v1/jobs/{job_id}/stream")
+async def websocket_job_stream(websocket: WebSocket, job_id: int, db: Session = Depends(get_db)):
+    """
+    Real-time WebSocket stream for a specific job.
+
+    Messages emitted:
+      {"type": "frame_result", "frame_index": N, "tracks": [...], ...}
+      {"type": "status", "stage": "...", "progress": N}
+      {"type": "completed", "total_tracks": N, ...}
+      {"type": "error", "message": "..."}
+    """
+    await websocket.accept()
+
+    # Verify job exists
+    job = db.query(ProcessingJob).filter(ProcessingJob.id == job_id).first()
+    if not job:
+        await websocket.send_json({"type": "error", "job_id": job_id, "message": "Job not found"})
+        await websocket.close()
+        return
+
+    # If job already completed (e.g. browser reconnecting), immediately notify.
+    if job.status == "SUCCEEDED":
+        await websocket.send_json({
+            "type": "completed",
+            "job_id": job_id,
+            "message": "Job already completed — fetch tracks via /api/v1/jobs/{job_id}/tracks",
+            "total_tracks": db.query(Track).filter(Track.job_id == job_id).count()
+        })
+        await websocket.close()
+        return
+
+    if job.status == "FAILED":
+        await websocket.send_json({
+            "type": "error",
+            "job_id": job_id,
+            "message": job.error_message or "Job failed"
+        })
+        await websocket.close()
+        return
+
+    # Get or create the queue for this job
+    loop = asyncio.get_event_loop()
+    queue = get_or_create_queue(job_id, loop)
+
+    try:
+        while True:
+            try:
+                # Wait for next message with a 30-second timeout
+                # (handles hung jobs without leaking the connection)
+                msg = await asyncio.wait_for(queue.get(), timeout=30.0)
+                await websocket.send_json(msg)
+                queue.task_done()
+
+                # Stop loop on terminal messages
+                if msg.get("type") in ("completed", "error"):
+                    break
+
+            except asyncio.TimeoutError:
+                # Send a keepalive ping so the browser doesn't close the WS
+                try:
+                    await websocket.send_json({"type": "ping", "job_id": job_id})
+                except Exception:
+                    break
+
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        try:
+            await websocket.send_json({"type": "error", "job_id": job_id, "message": str(e)})
+        except Exception:
+            pass
+    finally:
+        # Only clean up queue if the job is done (so reconnects still work while running)
+        db.refresh(job)
+        if job.status in ("SUCCEEDED", "FAILED"):
+            drop_job_queue(job_id)
+        try:
+            await websocket.close()
+        except Exception:
+            pass
 
 @app.get("/api/v1/jobs", response_model=List[JobResponse])
 def list_jobs(status: Optional[str] = None, db: Session = Depends(get_db)):
@@ -679,4 +777,4 @@ def generate_pdf_report(job_id: int, db: Session = Depends(get_db)):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("apps.api.main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("apps.api.main:app", host="0.0.0.0", port=8000, reload=False)
