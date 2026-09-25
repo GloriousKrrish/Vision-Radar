@@ -1,0 +1,383 @@
+{
+  "video_path": "Traffic1.mp4",
+  "video_sha256": "a4c3ee6aeca7f5085cc49408d572e3e3df7cab65ead15701996724827ef99c10",
+  "platform": "Windows-11-10.0.26220-SP0",
+  "python": "3.14.4",
+  "opencv": "5.0.0",
+  "file_size_mb": 11.69,
+  "upload": {
+    "read_ms": 18.4,
+    "write_ms": 74.8,
+    "total_ms": 93.2,
+    "speed_mbps": 125.5,
+    "moov_at_start": true,
+    "architecture_limitation": "FULL UPLOAD REQUIRED before CV processing can begin. Backend inference cannot start until the complete video file is written to disk and VideoCapture can open it."
+  },
+  "model": {
+    "path": "data/models/yolox_nano.onnx",
+    "loaded": true,
+    "cold_start_ms": 189.8,
+    "warmup_ms": 158.2,
+    "model_ram_mb": 47.2,
+    "note": "Model is loaded ONCE per job in run_job_streaming(). Not per-frame."
+  },
+  "decoder": {
+    "init_ms": 138.9,
+    "width": 1920,
+    "height": 1080,
+    "fps": 29.97,
+    "total_frames": 335
+  },
+  "first_frame_decode_ms": 123.9,
+  "first_inference_ms": 91.4,
+  "first_tracker_ms": 0.1,
+  "steady_state": {
+    "frames_benchmarked": 50,
+    "avg_detector_ms": 100.6,
+    "avg_tracker_ms": 0.3,
+    "avg_speed_ms": 3.1,
+    "avg_total_pipeline_ms": 104.0,
+    "p95_detector_ms": 112.5,
+    "p95_total_ms": 116.8,
+    "detector_only_fps": 9.9,
+    "full_pipeline_fps": 9.6,
+    "video_fps": 29.97,
+    "real_time_factor": 0.321,
+    "avg_detections_per_frame": 4.4,
+    "avg_tracks_per_frame": 6.1,
+    "per_frame_det_ms": [
+      122.2,
+      118.2,
+      103.8,
+      92.7,
+      109.1,
+      106.2,
+      109.6,
+      93.2,
+      94.2,
+      106.7,
+      106.3,
+      102.2,
+      109.4,
+      115.8,
+      112.7,
+      100.7,
+      102.2,
+      107.2,
+      109.3,
+      105.4,
+      111.4,
+      112.0,
+      108.0,
+      100.4,
+      95.4,
+      98.3,
+      94.8,
+      91.7,
+      103.7,
+      102.6,
+      101.1,
+      91.0,
+      81.1,
+      85.0,
+      78.6,
+      109.6,
+      91.3,
+      91.5,
+      102.8,
+      107.7,
+      96.0,
+      99.2,
+      97.6,
+      85.9,
+      96.6,
+      120.9,
+      96.1,
+      99.5,
+      100.1,
+      94.6
+    ],
+    "per_frame_total_ms": [
+      123.6,
+      118.8,
+      114.8,
+      93.4,
+      110.1,
+      107.1,
+      110.5,
+      94.1,
+      95.2,
+      109.3,
+      107.9,
+      104.8,
+      110.9,
+      119.2,
+      114.1,
+      102.2,
+      103.6,
+      109.8,
+      111.7,
+      107.7,
+      114.8,
+      115.4,
+      111.6,
+      102.3,
+      97.2,
+      101.6,
+      96.8,
+      93.7,
+      106.3,
+      104.8,
+      103.5,
+      96.3,
+      83.6,
+      87.6,
+      81.1,
+      115.6,
+      94.1,
+      94.4,
+      106.0,
+      113.3,
+      99.0,
+      102.5,
+      112.9,
+      89.2,
+      117.4,
+      124.8,
+      101.9,
+      104.2,
+      106.0,
+      99.1
+    ]
+  },
+  "resolution_benchmark": [
+    {
+      "resolution": "640\u00d7640",
+      "avg_ms": 109.4,
+      "fps": 9.1,
+      "avg_detections": 5.0
+    },
+    {
+      "resolution": "416\u00d7416",
+      "avg_ms": 49.7,
+      "fps": 20.1,
+      "avg_detections": 1.0
+    },
+    {
+      "resolution": "320\u00d7320",
+      "avg_ms": 29.4,
+      "fps": 34.0,
+      "avg_detections": 0.2
+    }
+  ],
+  "frame_skip_analysis": [
+    {
+      "process_every_nth_frame": 1,
+      "effective_processing_fps": 9.6,
+      "effective_rtf": 0.321,
+      "accuracy_impact": "BASELINE",
+      "implemented": false,
+      "note": "Frame skipping NOT implemented. Listed for tradeoff documentation only."
+    },
+    {
+      "process_every_nth_frame": 2,
+      "effective_processing_fps": 19.2,
+      "effective_rtf": 0.642,
+      "accuracy_impact": "UNKNOWN -- track continuity risk at skip=2. ByteTrack Kalman filter gap may cause ID switches.",
+      "implemented": false,
+      "note": "Frame skipping NOT implemented. Listed for tradeoff documentation only."
+    },
+    {
+      "process_every_nth_frame": 3,
+      "effective_processing_fps": 28.8,
+      "effective_rtf": 0.962,
+      "accuracy_impact": "UNKNOWN -- track continuity risk at skip=3. ByteTrack Kalman filter gap may cause ID switches.",
+      "implemented": false,
+      "note": "Frame skipping NOT implemented. Listed for tradeoff documentation only."
+    }
+  ],
+  "queue_backpressure": {
+    "queue_max_size": 64,
+    "frames_produced": 100,
+    "frames_emitted": 100,
+    "frames_dropped": 0,
+    "frames_received": 0,
+    "drop_rate_pct": 0.0,
+    "tracker_sequential": true,
+    "tracker_state_affected_by_drop": false
+  },
+  "latency_breakdown": {
+    "stages": [
+      {
+        "stage": "T1: Video visible (blob URL)",
+        "duration_ms": 0.0,
+        "cumulative_ms": 0.0
+      },
+      {
+        "stage": "T2->T5: Upload file to backend",
+        "duration_ms": 93.2,
+        "cumulative_ms": 93.2
+      },
+      {
+        "stage": "T6: Job creation (DB + HTTP)",
+        "duration_ms": 143.2,
+        "cumulative_ms": 236.3
+      },
+      {
+        "stage": "T7: Decoder init (VideoCapture)",
+        "duration_ms": 282.0,
+        "cumulative_ms": 518.3
+      },
+      {
+        "stage": "T8: First frame decode",
+        "duration_ms": 123.9,
+        "cumulative_ms": 642.2
+      },
+      {
+        "stage": "T9->T10: First YOLOX inference",
+        "duration_ms": 91.4,
+        "cumulative_ms": 733.6
+      },
+      {
+        "stage": "T11: First ByteTrack update",
+        "duration_ms": 0.1,
+        "cumulative_ms": 733.7
+      },
+      {
+        "stage": "T12: Emit to asyncio.Queue",
+        "duration_ms": 0.5,
+        "cumulative_ms": 734.2
+      },
+      {
+        "stage": "T13: WebSocket receive",
+        "duration_ms": 2.0,
+        "cumulative_ms": 736.2
+      },
+      {
+        "stage": "T14: Frontend store (Map.set)",
+        "duration_ms": 0.5,
+        "cumulative_ms": 736.7
+      },
+      {
+        "stage": "T15: Canvas render (RAF ~16ms)",
+        "duration_ms": 16.7,
+        "cumulative_ms": 753.4
+      }
+    ],
+    "total_first_box_latency_ms": 517.1,
+    "dominant_bottleneck_stage": "T7: Decoder init (VideoCapture)",
+    "dominant_bottleneck_ms": 282.0,
+    "dominant_bottleneck_pct": 54.5,
+    "note": "T2->T5 (upload) includes HTTP multipart upload from browser + disk write on server. T6 (job creation) includes DB insert + FastAPI response. All backend timings are measured on localhost. Network latency ~0 ms loopback."
+  },
+  "architecture_comparison": [
+    {
+      "name": "A. Current: Full Upload -> Backend Processing",
+      "first_detection_latency": "517 ms (measured)",
+      "implementation_complexity": "IMPLEMENTED",
+      "cpu_requirement": "CPU-only feasible",
+      "accuracy": "YOLOX-Nano full 640\u00d7640 (baseline)",
+      "reliability": "HIGH -- deterministic pipeline",
+      "deployment": "Single-server Python/FastAPI",
+      "rtf": "0.32",
+      "notes": "Current bottleneck: upload must complete before CV starts."
+    },
+    {
+      "name": "B. Chunked Upload + Progressive Backend Processing",
+      "first_detection_latency": "~500-1500 ms (estimated -- first chunk + decoder warm-up)",
+      "implementation_complexity": "MEDIUM -- requires fragmented MP4 (faststart moov), partial VideoCapture support",
+      "cpu_requirement": "CPU-only feasible",
+      "accuracy": "Same as A if full resolution preserved",
+      "reliability": "MEDIUM -- partial-file VideoCapture is brittle on non-faststart MP4",
+      "deployment": "Requires chunked multipart upload + backend buffer management",
+      "rtf": "0.32 (same CV pipeline)",
+      "notes": "FEASIBILITY: Requires MP4 with moov atom at file START (-movflags faststart). Current Traffic1.mp4 moov position: FRONT. VideoCapture on partial files is unreliable with standard OpenCV. NOT recommended without explicit re-mux pipeline."
+    },
+    {
+      "name": "C. Browser-Side ONNX/WebGPU Inference",
+      "first_detection_latency": "~200-800 ms (no upload required -- local decode+inference)",
+      "implementation_complexity": "HIGH -- requires onnxruntime-web or TF.js, WASM/WebGPU runtime",
+      "cpu_requirement": "Browser WebGPU or WASM SIMD",
+      "accuracy": "Same model -- identical if float32 precision maintained",
+      "reliability": "MEDIUM -- WebGPU availability varies; WASM slower than native",
+      "deployment": "Frontend-only -- no backend CV",
+      "rtf": "Potentially >= 1.0 with WebGPU",
+      "notes": "Eliminates upload bottleneck. NOT measured -- theoretical comparison only."
+    },
+    {
+      "name": "D. Live Camera / RTSP Stream",
+      "first_detection_latency": "~100-500 ms (RTSP buffer -> first frame -> inference)",
+      "implementation_complexity": "HIGH -- requires RTSP client, live buffer management",
+      "cpu_requirement": "GPU recommended for true real-time",
+      "accuracy": "Same YOLOX -- identical",
+      "reliability": "MEDIUM -- network stream reliability varies",
+      "deployment": "Infrastructure camera required; backend RTSP reader",
+      "rtf": "Depends on GPU: CPU ~0.5, GPU >= 1.0 (estimated)",
+      "notes": "Not applicable to current uploaded-video use case."
+    }
+  ],
+  "optimization_candidates": [
+    {
+      "rank": 1,
+      "component": "Upload (T2->T5)",
+      "measured_ms": 93.2,
+      "pct_of_total": 18.0,
+      "bottleneck_type": "A: Upload bottleneck",
+      "reducible": "YES -- chunked upload (MP4 faststart required)",
+      "accuracy_impact": "None (upload is I/O, not CV)",
+      "recommendation": "Investigate chunked upload with moov faststart re-mux if first-box latency target < 1 s."
+    },
+    {
+      "rank": 2,
+      "component": "YOLOX Inference per frame",
+      "measured_ms": 100.6,
+      "pct_of_total": 19.5,
+      "bottleneck_type": "D: YOLOX first-inference / steady-state",
+      "reducible": "PARTIAL -- GPU would reduce to ~5-15 ms; smaller input size reduces accuracy",
+      "accuracy_impact": "HIGH if resolution reduced; NONE if GPU used at same resolution",
+      "recommendation": "GPU backend (CUDA/OpenVINO) is the primary lever for RTF >= 1.0."
+    },
+    {
+      "rank": 3,
+      "component": "Model cold-start",
+      "measured_ms": 189.8,
+      "pct_of_total": 36.7,
+      "bottleneck_type": "D: YOLOX initialization",
+      "reducible": "YES -- pre-load model at server startup (already done once per job; amortize across jobs)",
+      "accuracy_impact": "None",
+      "recommendation": "Pre-warm YOLOX at server startup. Already: model loaded once per job, not per-frame."
+    },
+    {
+      "rank": 4,
+      "component": "Decoder init (T7)",
+      "measured_ms": 138.9,
+      "pct_of_total": 26.9,
+      "bottleneck_type": "C: Video decoder",
+      "reducible": "MINIMAL -- VideoCapture.open() is fast on local SSD",
+      "accuracy_impact": "None",
+      "recommendation": "No action required. < 50 ms typically."
+    },
+    {
+      "rank": 5,
+      "component": "ByteTrack update",
+      "measured_ms": 0.3,
+      "pct_of_total": 0.1,
+      "bottleneck_type": "E: ByteTrack",
+      "reducible": "MINIMAL -- tracker is already fast < 10 ms",
+      "accuracy_impact": "N/A",
+      "recommendation": "Not a meaningful bottleneck. No action."
+    }
+  ],
+  "summary": {
+    "total_first_box_latency_ms": 517.1,
+    "dominant_bottleneck": "T7: Decoder init (VideoCapture)",
+    "dominant_bottleneck_pct": 54.5,
+    "steady_state_fps": 9.6,
+    "rtf": 0.321,
+    "rtf_classification": "SUB-REAL-TIME",
+    "model_cold_start_ms": 189.8,
+    "model_warmup_ms": 158.2,
+    "upload_speed_mbps": 125.5,
+    "moov_at_start": true
+  }
+}
