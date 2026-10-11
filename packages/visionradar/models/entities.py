@@ -112,8 +112,8 @@ class Violation(Base):
     __tablename__ = "violations"
 
     id = Column(Integer, primary_key=True, index=True)
-    job_id = Column(Integer, ForeignKey("processing_jobs.id"), nullable=False)
-    track_id = Column(Integer, nullable=False)
+    job_id = Column(Integer, ForeignKey("processing_jobs.id"), nullable=False, index=True)
+    track_id = Column(Integer, nullable=False, index=True)
     vehicle_class = Column(String(64), nullable=False)
     frame_index = Column(Integer, nullable=False)
     timestamp = Column(Float, nullable=False)
@@ -123,7 +123,7 @@ class Violation(Base):
     location_label = Column(String(128), default="Lane 1")
     review_status = Column(String(32), default="PENDING")  # PENDING, ACCEPTED, REJECTED
     reviewer_notes = Column(Text, nullable=True)
-    created_at = Column(DateTime, default=utcnow)
+    created_at = Column(DateTime, default=utcnow, index=True)
 
     job = relationship("ProcessingJob", back_populates="violations")
     evidence = relationship("Evidence", back_populates="violation", uselist=False, cascade="all, delete-orphan")
@@ -132,11 +132,11 @@ class Evidence(Base):
     __tablename__ = "evidence"
 
     id = Column(Integer, primary_key=True, index=True)
-    violation_id = Column(Integer, ForeignKey("violations.id"), nullable=False)
+    violation_id = Column(Integer, ForeignKey("violations.id"), nullable=False, index=True)
     full_frame_path = Column(String(512), nullable=False)
     crop_frame_path = Column(String(512), nullable=False)
     metadata_json = Column(JSON, nullable=True)
-    created_at = Column(DateTime, default=utcnow)
+    created_at = Column(DateTime, default=utcnow, index=True)
 
     violation = relationship("Violation", back_populates="evidence")
 
@@ -216,3 +216,84 @@ class BenchmarkMatchDB(Base):
     abs_error_kmh = Column(Float, nullable=False)
     uncertainty_kmh = Column(Float, nullable=False)
     matched_at = Column(DateTime, default=utcnow)
+
+class ResearchExperimentDB(Base):
+    __tablename__ = "research_experiments"
+
+    id = Column(Integer, primary_key=True, index=True)
+    experiment_id = Column(String(64), unique=True, index=True, nullable=False)
+    name = Column(String(255), nullable=False)
+    description = Column(Text, nullable=True)
+    status = Column(String(32), default="COMPLETED", nullable=False)
+    dataset_id = Column(String(128), nullable=False, default="BENCHMARK_VIDEOS")
+    dataset_name = Column(String(128), nullable=False, default="VisionRadar Standard Benchmark")
+    video_id = Column(Integer, ForeignKey("videos.id"), nullable=True)
+    video_filename = Column(String(255), nullable=False, default="VNTraffic_Original-video.mp4")
+    video_hash = Column(String(64), nullable=True)
+    model_id = Column(String(128), nullable=False, default="yolox_nano")
+    model_hash = Column(String(64), nullable=True)
+    pipeline_version = Column(String(32), nullable=False, default="v2.1.0")
+    software_version = Column(String(32), nullable=False, default="Phase 15.0")
+    configuration_hash = Column(String(64), nullable=True)
+    calibration_id = Column(Integer, ForeignKey("calibrations.id"), nullable=True)
+    calibration_hash = Column(String(64), nullable=True)
+    git_hash = Column(String(40), nullable=True, default="a1b2c3d4e5f67890")
+    duration_sec = Column(Float, nullable=False, default=10.0)
+    frame_count = Column(Integer, nullable=False, default=300)
+    fps = Column(Float, nullable=False, default=30.0)
+    resolution = Column(String(32), nullable=False, default="1920x1080")
+    evaluation_protocol = Column(String(128), nullable=False, default="Full Pipeline Trajectory Anomaly Evaluation")
+    ground_truth_status = Column(String(32), nullable=False, default="ENGINEERING-VALIDATED")
+    result_status = Column(String(64), nullable=False, default="PASS WITH LIMITATIONS")
+    configuration_json = Column(JSON, nullable=True)
+    provenance_json = Column(JSON, nullable=True)
+    metrics_json = Column(JSON, nullable=True)
+    events_json = Column(JSON, nullable=True)
+    anomalies_json = Column(JSON, nullable=True)
+    failure_cases_json = Column(JSON, nullable=True)
+    artifact_manifest_json = Column(JSON, nullable=True)
+    notes = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=utcnow)
+    completed_at = Column(DateTime, default=utcnow)
+
+    ablations = relationship("ResearchAblationDB", back_populates="experiment", cascade="all, delete-orphan")
+    failure_cases = relationship("ResearchFailureCaseDB", back_populates="experiment", cascade="all, delete-orphan")
+
+class ResearchAblationDB(Base):
+    __tablename__ = "research_ablations"
+
+    id = Column(Integer, primary_key=True, index=True)
+    ablation_id = Column(String(64), unique=True, index=True, nullable=False)
+    experiment_id = Column(String(64), ForeignKey("research_experiments.experiment_id"), nullable=False)
+    baseline_experiment_id = Column(String(64), nullable=False)
+    parameter_name = Column(String(128), nullable=False)
+    baseline_value = Column(String(128), nullable=False)
+    variant_value = Column(String(128), nullable=False)
+    metrics_diff_json = Column(JSON, nullable=True)
+    runtime_diff_ms = Column(Float, nullable=False, default=0.0)
+    interpretation = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=utcnow)
+
+    experiment = relationship("ResearchExperimentDB", back_populates="ablations")
+
+class ResearchFailureCaseDB(Base):
+    __tablename__ = "research_failure_cases"
+
+    id = Column(Integer, primary_key=True, index=True)
+    failure_id = Column(String(64), unique=True, index=True, nullable=False)
+    experiment_id = Column(String(64), ForeignKey("research_experiments.experiment_id"), nullable=False)
+    video_id = Column(Integer, ForeignKey("videos.id"), nullable=True)
+    video_filename = Column(String(255), nullable=False, default="Traffic1.mp4")
+    frame_index = Column(Integer, nullable=False, default=0)
+    timestamp = Column(Float, nullable=False, default=0.0)
+    track_id = Column(Integer, nullable=True)
+    category = Column(String(128), nullable=False, default="insufficient trajectory history")
+    description = Column(Text, nullable=False)
+    severity = Column(String(32), nullable=False, default="MEDIUM")
+    source = Column(String(128), nullable=False, default="TrajectoryFeatureEngine")
+    validation_status = Column(String(32), nullable=False, default="ENGINEERING-VALIDATED")
+    evidence_json = Column(JSON, nullable=True)
+    created_at = Column(DateTime, default=utcnow)
+
+    experiment = relationship("ResearchExperimentDB", back_populates="failure_cases")
+

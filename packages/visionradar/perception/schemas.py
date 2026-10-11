@@ -26,6 +26,29 @@ class TrackState(str, Enum):
     REMOVED = "removed"        # Exceeded grace window, track terminated
 
 
+class DetectionQualityFlag(str, Enum):
+    VALID = "VALID"
+    LOW_CONFIDENCE = "LOW_CONFIDENCE"
+    TOO_SMALL = "TOO_SMALL"
+    OUTSIDE_ROI = "OUTSIDE_ROI"
+    EDGE_CLIPPED = "EDGE_CLIPPED"
+    SUSPICIOUS_GEOMETRY = "SUSPICIOUS_GEOMETRY"
+    DUPLICATE_CANDIDATE = "DUPLICATE_CANDIDATE"
+
+
+class TrajectoryStatus(str, Enum):
+    TRAJECTORY_VALID = "TRAJECTORY_VALID"
+    TRAJECTORY_SUSPICIOUS = "TRAJECTORY_SUSPICIOUS"
+    TRAJECTORY_INVALID = "TRAJECTORY_INVALID"
+
+
+class CalibrationStatus(str, Enum):
+    CALIBRATION_VALID = "CALIBRATION_VALID"
+    OUT_OF_ROI = "OUT_OF_ROI"
+    CALIBRATION_UNSTABLE = "CALIBRATION_UNSTABLE"
+    WORLD_COORDINATE_INVALID = "WORLD_COORDINATE_INVALID"
+
+
 @dataclass(frozen=True)
 class BoundingBox:
     x1: float  # Pixel coords, top-left origin
@@ -49,6 +72,9 @@ class VehicleDetection:
     confidence: float           # 0.0 - 1.0, raw detector confidence
     vehicle_class: VehicleClass
     class_confidence: float       # 0.0 - 1.0, classification confidence
+    quality_flags: List[str] = field(default_factory=lambda: ["VALID"])
+    size_category: str = "32-64"
+    detector_validity: bool = True
 
     def to_dict(self) -> dict:
         return {
@@ -57,7 +83,10 @@ class VehicleDetection:
             "bbox": self.bbox.to_dict(),
             "confidence": round(self.confidence, 4),
             "vehicle_class": self.vehicle_class.value,
-            "class_confidence": round(self.class_confidence, 4)
+            "class_confidence": round(self.class_confidence, 4),
+            "quality_flags": self.quality_flags,
+            "size_category": self.size_category,
+            "detector_validity": self.detector_validity
         }
 
 
@@ -74,6 +103,20 @@ class VehicleTrack:
     frames_tracked: int                # Count of frames where state was ACTIVE
     frames_since_last_detection: int     # Resets to 0 on ACTIVE frame; drives NEW/LOST/REMOVED
     velocity_px_per_frame: Optional[tuple] = None  # (dx, dy) in pixel space
+    raw_class: Optional[VehicleClass] = None
+    consensus_class: Optional[VehicleClass] = None
+    class_confidence: float = 1.0
+    class_flip_count: int = 0
+    track_quality_score: float = 100.0
+    track_quality_level: str = "HIGH"
+    missing_frames: int = 0
+    recovery_count: int = 0
+    fragmentation_count: int = 0
+    observed_internal_id_changes: int = 0
+    trajectory_status: str = "TRAJECTORY_VALID"
+    calibration_status: str = "CALIBRATION_VALID"
+    motion_anomaly: bool = False
+    motion_anomaly_reason: Optional[str] = None
 
     def to_dict(self) -> dict:
         return {
@@ -81,12 +124,26 @@ class VehicleTrack:
             "state": self.state.value,
             "bbox": self.bbox.to_dict(),
             "confidence": round(self.confidence, 4),
-            "vehicle_class": self.vehicle_class.value,
+            "vehicle_class": (self.consensus_class or self.vehicle_class).value,
+            "raw_class": (self.raw_class or self.vehicle_class).value,
+            "consensus_class": (self.consensus_class or self.vehicle_class).value,
+            "class_confidence": round(self.class_confidence, 4),
+            "class_flip_count": self.class_flip_count,
             "first_seen_frame": self.first_seen_frame,
             "last_seen_frame": self.last_seen_frame,
             "frames_tracked": self.frames_tracked,
             "frames_since_last_detection": self.frames_since_last_detection,
-            "velocity_px_per_frame": [round(v, 2) for v in self.velocity_px_per_frame] if self.velocity_px_per_frame else None
+            "missing_frames": self.missing_frames,
+            "recovery_count": self.recovery_count,
+            "fragmentation_count": self.fragmentation_count,
+            "observed_internal_id_changes": self.observed_internal_id_changes,
+            "velocity_px_per_frame": [round(v, 2) for v in self.velocity_px_per_frame] if self.velocity_px_per_frame else None,
+            "track_quality_score": round(self.track_quality_score, 1),
+            "track_quality_level": self.track_quality_level,
+            "trajectory_status": self.trajectory_status,
+            "calibration_status": self.calibration_status,
+            "motion_anomaly": self.motion_anomaly,
+            "motion_anomaly_reason": self.motion_anomaly_reason
         }
 
 

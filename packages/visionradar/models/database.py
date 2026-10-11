@@ -9,15 +9,16 @@ os.makedirs("data", exist_ok=True)
 
 engine = create_engine(
     DATABASE_URL,
-    connect_args={"check_same_thread": False},
+    connect_args={"check_same_thread": False, "timeout": 30.0},
     echo=False
 )
 
-# Enable SQLite WAL (Write-Ahead Logging) and Foreign Keys for thread safety & performance
+# Enable SQLite WAL (Write-Ahead Logging), busy timeout, and Foreign Keys
 @event.listens_for(engine, "connect")
 def set_sqlite_pragma(dbapi_connection, connection_record):
     cursor = dbapi_connection.cursor()
     cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.execute("PRAGMA busy_timeout=30000")
     cursor.execute("PRAGMA foreign_keys=ON")
     cursor.close()
 

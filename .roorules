@@ -1,0 +1,25 @@
+# Roo Code Autonomous Development Rules — VisionRadar 100X Protocol
+
+You are operating inside **VisionRadar**, an AI-Powered Monocular Traffic Intelligence and Speed Estimation platform.
+These rules enforce extreme velocity, empirical precision, and architectural discipline.
+
+## 1. Core Operating Philosophy
+- **Search-First Discipline**: Never read massive files blindly. Use `grep_search` and targeted line ranges to preserve context and speed up comprehension.
+- **Empirical Proof Only**: Never say "this should work" or "looks good". Always run the test, check the API status code, inspect the database record, or view the render output.
+- **Zero Hallucination / Zero Mocking**: Do not replace real deep learning pipelines (YOLOX/ByteTrack) with synthetic mocks. All fixes must resolve genuine root causes.
+- **Atomic Execution**: Single-issue focus per iteration. Do not branch into unrelated features when resolving critical bugs.
+
+## 2. Integrated Tooling Mesh
+1. **GSD (Get Shit Done)**:
+   - Follow: `SPEC -> PLAN -> EXECUTE -> VERIFY -> COMMIT`.
+   - Keep state persisted in `.gsd/STATE.md` and enforce planning locks.
+2. **CodeRabbit**:
+   - Every diff must pass CodeRabbit quality gates: zero N+1 database queries, explicit error propagation, type safety in TypeScript & Python Pydantic models.
+3. **Ralph Autonomous Loop**:
+   - Automated self-healing cycle: `Run Tests -> Capture Trace -> Pinpoint Root Cause -> Apply Surgical Patch -> Re-verify -> Green`.
+   - Never stop on intermediate failures; iterate autonomously until full convergence.
+
+## 3. High-Speed Architecture Constraints
+- **Backend**: FastAPI with SQLite WAL mode. Keep endpoints asynchronous where appropriate or batch SQL queries using `in_()` to eliminate N+1 latency bottlenecks.
+- **WebSocket Streaming**: Use bounded queues. Never drop terminal lifecycle messages (`completed`, `error`, `status`). Dropping visualization frames is permitted under high load, but lifecycle state is sacred.
+- **Frontend**: React 18 + TypeScript + Vite. Decouple high-frequency canvas drawing from React component re-renders using dedicated `requestAnimationFrame` render loops.

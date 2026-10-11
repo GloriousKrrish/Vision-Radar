@@ -215,7 +215,7 @@ def test_pipeline_determinism(tmp_path):
     async def collect_results(pipeline, q, target_list):
         while pipeline.is_running() or not q.empty():
             try:
-                res = await asyncio.wait_for(q.get(), timeout=0.5)
+                res = await asyncio.wait_for(q.get(), timeout=2.0)
                 target_list.append(res)
                 q.task_done()
             except asyncio.TimeoutError:

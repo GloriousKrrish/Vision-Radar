@@ -22,6 +22,9 @@ from visionradar.perception.postprocess import postprocess_yolox_output
 from visionradar.perception.tracker import PerceptionTracker
 from visionradar.perception.lifecycle import ObjectLifecycleManager
 from visionradar.perception.metrics import PerceptionMetricsCollector
+from visionradar.perception.quality_engine import (
+    DetectionQualityEngine, TrackQualityEngine, TrajectoryQualityEngine
+)
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +69,10 @@ class PerceptionPipeline:
         self.tracker = PerceptionTracker(max_age=30, iou_threshold=0.3)
         self.lifecycle_manager = ObjectLifecycleManager(confirmation_frames=2, grace_window=15)
         self.metrics_collector = PerceptionMetricsCollector(max_history=1000)
+
+        self.detection_quality_engine = DetectionQualityEngine(low_conf_thresh=0.35)
+        self.track_quality_engine = TrackQualityEngine()
+        self.trajectory_quality_engine = TrajectoryQualityEngine()
 
         self.broadcast_queue: Optional[asyncio.Queue] = None
         self.event_loop: Optional[asyncio.AbstractEventLoop] = None
@@ -129,9 +136,9 @@ class PerceptionPipeline:
                 t1_inf = time.perf_counter()
                 timings["inference"] = inf_ms
 
-                # 4. Postprocess
+                # 4. Postprocess & Quality Evaluation
                 t0_post = time.perf_counter()
-                detections = postprocess_yolox_output(
+                raw_dets = postprocess_yolox_output(
                     raw_outputs=raw_outputs,
                     frame_id=frame_id,
                     source_shape=(w_src, h_src),
@@ -141,6 +148,7 @@ class PerceptionPipeline:
                     scale=scale,
                     pad=pad
                 )
+                detections = self.detection_quality_engine.evaluate_detections(raw_dets, frame_width=w_src, frame_height=h_src)
                 t1_post = time.perf_counter()
                 timings["postprocess"] = (t1_post - t0_post) * 1000.0
 
@@ -150,11 +158,22 @@ class PerceptionPipeline:
                 t1_trk = time.perf_counter()
                 timings["tracking"] = (t1_trk - t0_trk) * 1000.0
 
-                # 6. Object Lifecycle Manager
+                # 6. Object Lifecycle Manager & Track Quality Assessment
                 t0_life = time.perf_counter()
                 confirmed_tracks, lifecycle_events = self.lifecycle_manager.update(raw_tracks, frame_id)
+                confirmed_tracks = self.track_quality_engine.update_track_quality(confirmed_tracks, current_frame=frame_id)
+                
+                # Trajectory Quality
+                final_tracks = []
+                for trk in confirmed_tracks:
+                    raw_trk_obj = self.tracker.tracker.active_tracks.get(trk.track_id)
+                    traj_pts = raw_trk_obj.trajectory.points if raw_trk_obj and hasattr(raw_trk_obj, 'trajectory') else []
+                    eval_trk = self.trajectory_quality_engine.evaluate_track_trajectory(trk, traj_pts)
+                    final_tracks.append(eval_trk)
+
                 t1_life = time.perf_counter()
                 timings["lifecycle"] = (t1_life - t0_life) * 1000.0
+                timings["quality_engine"] = (time.perf_counter() - t0_post) * 1000.0 - timings["postprocess"] - timings["tracking"]
 
                 # 7. Assemble FrameResult
                 result_ts = time.perf_counter()
@@ -163,7 +182,7 @@ class PerceptionPipeline:
                     capture_ts=item.capture_ts,
                     result_ts=result_ts,
                     detections=detections,
-                    tracks=confirmed_tracks,
+                    tracks=final_tracks,
                     degraded=False,
                     stage_timings_ms=timings
                 )

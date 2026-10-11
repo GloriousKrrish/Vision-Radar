@@ -87,68 +87,69 @@ class BaseTracker(ABC):
 class ByteTrackTracker(BaseTracker):
     """
     ByteTrack implementation for robust association across high and low confidence detections.
-    Uses IoU greedy matching, center-distance fallback, and standard MOT metric tracking.
+    Uses two-stage association (D_high and D_low), IoU greedy matching, center-distance fallback,
+    and standard MOT metric tracking (ID switches, class switches, fragmentations).
     """
-    def __init__(self, max_age: int = 30, iou_threshold: float = 0.3):
+    def __init__(self, max_age: int = 30, iou_threshold: float = 0.3, high_threshold: float = 0.40):
         self.max_age = max_age
         self.iou_threshold = iou_threshold
+        self.high_threshold = high_threshold
         self.next_id = 1
         self.active_tracks: Dict[int, TrackedVehicle] = {}
+        self.recently_lost_tracks: Dict[int, Dict[str, Any]] = {}
         self.total_id_switches = 0
         self.total_class_switches = 0
         self.total_fragmentations = 0
         self.total_detections_processed = 0
 
-    def update(self, detections: List[Detection], frame_index: int, timestamp: float) -> List[TrackedVehicle]:
-        self.total_detections_processed += len(detections)
+    def _associate_pool(
+        self,
+        track_ids: List[int],
+        pool_dets: List[Detection],
+        matched_tracks: set,
+        matched_dets: set,
+        frame_index: int,
+        timestamp: float
+    ):
+        available_tids = [tid for tid in track_ids if tid not in matched_tracks]
+        available_didxs = [i for i in range(len(pool_dets)) if i not in matched_dets]
+        if not available_tids or not available_didxs:
+            return
 
-        # Increment time since update for existing tracks (without falsely counting consecutive frames as fragmentations)
-        for t in self.active_tracks.values():
-            t.time_since_update += 1
+        # 1. IoU Matching
+        iou_matrix = np.zeros((len(available_tids), len(available_didxs)), dtype=np.float32)
+        for i, tid in enumerate(available_tids):
+            t_bbox = self.active_tracks[tid].bbox
+            for j, d_idx in enumerate(available_didxs):
+                iou_matrix[i, j] = compute_iou(t_bbox, pool_dets[d_idx].bbox)
 
-        matched_dets = set()
-        matched_tracks = set()
+        while True:
+            if iou_matrix.size == 0:
+                break
+            max_idx = np.unravel_index(np.argmax(iou_matrix), iou_matrix.shape)
+            max_iou = iou_matrix[max_idx]
+            if max_iou < self.iou_threshold:
+                break
 
-        # Compute IoU matrix between existing tracks and new detections
-        track_ids = list(self.active_tracks.keys())
-        if track_ids and detections:
-            iou_matrix = np.zeros((len(track_ids), len(detections)), dtype=np.float32)
-            for i, tid in enumerate(track_ids):
-                t_bbox = self.active_tracks[tid].bbox
-                for j, det in enumerate(detections):
-                    iou_matrix[i, j] = compute_iou(t_bbox, det.bbox)
+            t_i, d_j = max_idx
+            tid = available_tids[t_i]
+            d_idx = available_didxs[d_j]
 
-            # Greedy IoU matching
-            while True:
-                if iou_matrix.size == 0:
-                    break
-                max_idx = np.unravel_index(np.argmax(iou_matrix), iou_matrix.shape)
-                max_iou = iou_matrix[max_idx]
-                if max_iou < self.iou_threshold:
-                    break
+            track_obj = self.active_tracks[tid]
+            if track_obj.time_since_update > 1:
+                self.total_fragmentations += 1
+            if track_obj.vehicle_class != pool_dets[d_idx].class_name:
+                self.total_class_switches += 1
 
-                t_idx, d_idx = max_idx
-                tid = track_ids[t_idx]
-                if tid not in matched_tracks and d_idx not in matched_dets:
-                    track_obj = self.active_tracks[tid]
+            track_obj.update(pool_dets[d_idx], frame_index, timestamp)
+            matched_tracks.add(tid)
+            matched_dets.add(d_idx)
 
-                    # Track Fragmentation (FM): Track was unobserved for >= 1 frame (time_since_update > 1) before re-matching
-                    if track_obj.time_since_update > 1:
-                        self.total_fragmentations += 1
+            iou_matrix[t_i, :] = -1.0
+            iou_matrix[:, d_j] = -1.0
 
-                    # Class Flip / Switch: Detector label change for the same track_id
-                    if track_obj.vehicle_class != detections[d_idx].class_name:
-                        self.total_class_switches += 1
-
-                    track_obj.update(detections[d_idx], frame_index, timestamp)
-                    matched_tracks.add(tid)
-                    matched_dets.add(d_idx)
-
-                iou_matrix[t_idx, :] = -1.0
-                iou_matrix[:, d_idx] = -1.0
-
-        # Center distance fallback matching for fast moving vehicles
-        for i, tid in enumerate(track_ids):
+        # 2. Center distance fallback matching for fast moving vehicles
+        for tid in available_tids:
             if tid in matched_tracks:
                 continue
             t_bbox = self.active_tracks[tid].bbox
@@ -157,37 +158,87 @@ class ByteTrackTracker(BaseTracker):
             best_d_idx = -1
             min_dist = 120.0  # max pixel distance search radius
 
-            for j, det in enumerate(detections):
-                if j in matched_dets:
+            for d_idx in available_didxs:
+                if d_idx in matched_dets:
                     continue
+                det = pool_dets[d_idx]
                 dc_x, dc_y = (det.bbox[0] + det.bbox[2]) / 2.0, (det.bbox[1] + det.bbox[3]) / 2.0
                 dist = np.hypot(dc_x - tc_x, dc_y - tc_y)
                 if dist < min_dist:
                     min_dist = dist
-                    best_d_idx = j
+                    best_d_idx = d_idx
 
             if best_d_idx >= 0:
                 track_obj = self.active_tracks[tid]
                 if track_obj.time_since_update > 1:
                     self.total_fragmentations += 1
-                if track_obj.vehicle_class != detections[best_d_idx].class_name:
+                if track_obj.vehicle_class != pool_dets[best_d_idx].class_name:
                     self.total_class_switches += 1
 
-                track_obj.update(detections[best_d_idx], frame_index, timestamp)
+                track_obj.update(pool_dets[best_d_idx], frame_index, timestamp)
                 matched_tracks.add(tid)
                 matched_dets.add(best_d_idx)
 
-        # Create new tracks for unmatched detections
-        for j, det in enumerate(detections):
-            if j not in matched_dets:
+    def update(self, detections: List[Detection], frame_index: int, timestamp: float) -> List[TrackedVehicle]:
+        self.total_detections_processed += len(detections)
+
+        # Increment time since update for existing tracks
+        for t in self.active_tracks.values():
+            t.time_since_update += 1
+
+        # Partition detections into High and Low confidence pools (genuine ByteTrack)
+        dets_high: List[Detection] = []
+        dets_low: List[Detection] = []
+        for d in detections:
+            if d.confidence >= self.high_threshold:
+                dets_high.append(d)
+            else:
+                dets_low.append(d)
+
+        track_ids = list(self.active_tracks.keys())
+        matched_tracks = set()
+        matched_high_dets = set()
+        matched_low_dets = set()
+
+        # Stage 1: Associate active tracks with High-confidence detections
+        self._associate_pool(track_ids, dets_high, matched_tracks, matched_high_dets, frame_index, timestamp)
+
+        # Stage 2: Associate remaining active tracks with Low-confidence detections
+        self._associate_pool(track_ids, dets_low, matched_tracks, matched_low_dets, frame_index, timestamp)
+
+        # Stage 3: Initiate new tracks ONLY from unmatched High-confidence detections
+        for j, det in enumerate(dets_high):
+            if j not in matched_high_dets:
+                # Check for ID Switch against recently lost tracks
+                for lost_tid, lost_meta in list(self.recently_lost_tracks.items()):
+                    ref_frame = lost_meta.get("lost_at_frame", lost_meta["last_frame"])
+                    if frame_index - ref_frame <= self.max_age:
+                        iou_lost = compute_iou(lost_meta["last_bbox"], det.bbox)
+                        if iou_lost >= 0.35:
+                            self.total_id_switches += 1
+                            del self.recently_lost_tracks[lost_tid]
+                            break
+
                 new_track = TrackedVehicle(self.next_id, det, frame_index, timestamp)
                 self.active_tracks[self.next_id] = new_track
                 self.next_id += 1
 
-        # Purge stale tracks
+        # Purge stale tracks and record them into recently_lost_tracks for ID switch accounting
         stale_ids = [tid for tid, t in self.active_tracks.items() if t.time_since_update > self.max_age]
         for tid in stale_ids:
+            stale_trk = self.active_tracks[tid]
+            self.recently_lost_tracks[tid] = {
+                "last_bbox": stale_trk.bbox,
+                "last_frame": stale_trk.last_frame,
+                "lost_at_frame": frame_index,
+                "vehicle_class": stale_trk.vehicle_class
+            }
             del self.active_tracks[tid]
+
+        # Evict old history from recently_lost_tracks
+        evict_lost = [tid for tid, m in self.recently_lost_tracks.items() if frame_index - m.get("lost_at_frame", m["last_frame"]) > self.max_age * 2]
+        for tid in evict_lost:
+            del self.recently_lost_tracks[tid]
 
         return list(self.active_tracks.values())
 

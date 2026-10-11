@@ -192,9 +192,12 @@ export const WorkbenchView: React.FC = () => {
         if (rh > ry) rh = rh - ry;
         const speedInfo = trk.speed_measurements?.find(
           (s: any) => s.frame === f || s.frame_index === f
-        ) || trk.speed_measurements?.[0];
-        const speedKmh = speedInfo?.smoothed_kmh ?? null;
-        const speedStatus = speedInfo?.error_components?.validity || (speedKmh != null ? 'VALID' : 'OUT_OF_ROI');
+        );
+        const speedKmh = speedInfo?.smoothed_kmh ?? speedInfo?.instantaneous_kmh ?? null;
+        let speedStatus = speedInfo?.error_components?.validity;
+        if (!speedStatus) {
+          speedStatus = (speedKmh != null && speedKmh > 0) ? 'VALID' : 'CALCULATING...';
+        }
         if (!map.has(f)) map.set(f, []);
         map.get(f)!.push({ track_id: trk.track_id, vehicle_class: trk.vehicle_class, confidence: trk.confidence, rx, ry, rw, rh, speedKmh, speedStatus });
       });
@@ -207,16 +210,23 @@ export const WorkbenchView: React.FC = () => {
   const [perceptionMetrics, setPerceptionMetrics] = useState<any | null>(null);
 
   const loadJobResults = useCallback(async (jobId: number) => {
+    if (activeJobIdRef.current !== null && activeJobIdRef.current !== jobId) {
+      return; // Stale job rejection
+    }
     try {
       const [trkRes, violsRes, jobRes] = await Promise.all([
-        fetch(`/api/v1/jobs/${jobId}/tracks`),
-        fetch(`/api/v1/violations`),
-        fetch(`/api/v1/jobs/${jobId}`)
+        fetch(`/api/v1/jobs/${jobId}/tracks`).catch(() => null),
+        fetch(`/api/v1/violations?job_id=${jobId}&limit=30`).catch(() => null),
+        fetch(`/api/v1/jobs/${jobId}`).catch(() => null)
       ]);
 
-      const trkData = trkRes.ok ? await trkRes.json() : [];
-      const violsData = violsRes.ok ? await violsRes.json() : [];
-      const jobData = jobRes.ok ? await jobRes.json() : null;
+      if (activeJobIdRef.current !== null && activeJobIdRef.current !== jobId) {
+        return; // Stale job rejection after async response
+      }
+
+      const trkData = (trkRes && trkRes.ok) ? await trkRes.json() : [];
+      const violsData = (violsRes && violsRes.ok) ? await violsRes.json() : [];
+      const jobData = (jobRes && jobRes.ok) ? await jobRes.json() : null;
 
       if (trkData?.length) {
         setRealTracks(trkData);
@@ -236,6 +246,8 @@ export const WorkbenchView: React.FC = () => {
       setJobStatusText(`Job #${jobId} COMPLETED — REAL VIDEO · LIVE AI ANALYSIS`);
     } catch (err) {
       console.error('Failed to load job results:', err);
+      setPipelineStage('COMPLETED');
+      setJobStatusText(`Job #${jobId} Complete — REAL VIDEO · LIVE AI ANALYSIS`);
     }
   }, []);
 
@@ -296,6 +308,10 @@ export const WorkbenchView: React.FC = () => {
       let msg: any;
       try { msg = JSON.parse(event.data); } catch { return; }
 
+      if (activeJobIdRef.current !== null && activeJobIdRef.current !== jobId) {
+        return; // Stale job isolation
+      }
+
       const payload = msg.payload || msg;
       const type = msg.type;
 
@@ -347,6 +363,28 @@ export const WorkbenchView: React.FC = () => {
           }
         }
 
+        // Frame synchronization without repeated seeking
+        if (videoRef.current && videoRef.current.readyState > 1) {
+          const vid = videoRef.current;
+          const vFps = telemetry?.video_fps || 29.97;
+          const vidCurrentFrame = Math.floor(vid.currentTime * vFps);
+          const frameLag = vidCurrentFrame - frameIdx;
+
+          if (frameLag > 45) {
+            // Severe drift: one-time gentle re-anchor
+            vid.currentTime = Math.max(0, frameIdx / vFps);
+          } else if (frameLag > 4) {
+            // Video is ahead of inference stream: slow down smoothly
+            vid.playbackRate = 0.5;
+          } else if (frameLag < -4) {
+            // Video is behind inference stream: speed up smoothly
+            vid.playbackRate = 1.25;
+          } else {
+            // In sync
+            vid.playbackRate = 1.0;
+          }
+        }
+
         if (tracks.length > 0) {
           setLiveTrackCount(prev => Math.max(prev, tracks.length));
         }
@@ -381,6 +419,9 @@ export const WorkbenchView: React.FC = () => {
 
       } else if (msg.type === 'completed') {
         isLiveStreamingRef.current = false;
+        if (videoRef.current) {
+          videoRef.current.playbackRate = 1.0;
+        }
         setWsConnected(false);
         setPipelineStage('FINALIZING');
         setJobStatusText(`Job #${jobId} complete — loading finalized tracks...`);
@@ -496,16 +537,25 @@ export const WorkbenchView: React.FC = () => {
       }
 
       // ---------------------------------------------------------------------
-      // REAL Bounding Box Rendering — EXACT Frame Match (Requirement #11)
+      // REAL Bounding Box Rendering — Frame Sync Contract (±1 Frame Tolerance)
       // ---------------------------------------------------------------------
       let currentFrameDets: any[] | undefined;
       if (isLiveStreamingRef.current) {
-        currentFrameDets = rtFrameBufferRef.current.get(currentVidFrame);
+        currentFrameDets = rtFrameBufferRef.current.get(currentVidFrame)
+          || rtFrameBufferRef.current.get(currentVidFrame - 1)
+          || rtFrameBufferRef.current.get(currentVidFrame + 1);
+        // Only fallback to latestInferenceFrame if within ±2 frames (prevent ghosting)
+        if (!currentFrameDets && latestInferenceFrame !== null && latestInferenceFrame !== undefined && Math.abs(currentVidFrame - latestInferenceFrame) <= 2) {
+          currentFrameDets = rtFrameBufferRef.current.get(latestInferenceFrame);
+        }
       } else {
-        currentFrameDets = frameMapRef.current.get(currentVidFrame);
+        currentFrameDets = frameMapRef.current.get(currentVidFrame)
+          || frameMapRef.current.get(currentVidFrame - 1)
+          || frameMapRef.current.get(currentVidFrame + 1);
       }
 
       if (currentFrameDets && currentFrameDets.length > 0) {
+        const renderedBadges: { x: number, y: number, w: number, h: number }[] = [];
         currentFrameDets.forEach(det => {
           const bx = det.rx * scaleX;
           const by = det.ry * scaleY;
@@ -513,13 +563,21 @@ export const WorkbenchView: React.FC = () => {
           const bh = Math.max(14, det.rh * scaleY);
 
           const hasValidSpeed = det.speedKmh !== null && det.speedKmh !== undefined && det.speedKmh > 0;
-          const isCalculating = !hasValidSpeed && det.speedStatus === 'INSUFFICIENT_DATA';
+          const isCalculating = !hasValidSpeed && (
+            det.speedStatus === 'INSUFFICIENT_DATA' ||
+            det.speedStatus === 'INSUFFICIENT_HISTORY' ||
+            det.speedStatus === 'LOW_CONFIDENCE' ||
+            det.speedStatus === 'CALCULATING...'
+          );
+          const isCalibReq = !hasValidSpeed && det.speedStatus === 'CALIBRATION_REQUIRED';
           const isOutOfROI = !hasValidSpeed && det.speedStatus === 'OUT_OF_ROI';
+          const isUnstable = !hasValidSpeed && (det.speedStatus === 'CALIBRATION_UNSTABLE' || det.speedStatus === 'WORLD_COORDINATE_INVALID');
           const bad = hasValidSpeed && det.speedKmh > speedLimit;
-          const col = isCalculating ? '#F59E0B' : !hasValidSpeed ? '#94A3B8' : bad ? '#EF4444' : '#10B981';
+
+          const col = isCalibReq ? '#64748B' : isCalculating ? '#F59E0B' : !hasValidSpeed ? '#94A3B8' : bad ? '#EF4444' : '#10B981';
           const isSelected = selTrack === det.track_id;
 
-          cx.fillStyle = isSelected ? '#F59E0B25' : (col + '1A');
+          cx.fillStyle = isSelected ? '#F59E0B25' : (col + '33');
           cx.fillRect(bx, by, bw, bh);
 
           const bracketLen = Math.min(10, Math.min(bw, bh) * 0.3);
@@ -535,30 +593,56 @@ export const WorkbenchView: React.FC = () => {
           cx.fillStyle = isSelected ? '#F59E0B' : col; cx.beginPath();
           cx.arc(bx + bw / 2, by + bh, 3, 0, 2 * Math.PI); cx.fill();
 
-          // HUD Badge
+          // HUD Badge — clear semantic status, no N/A
           const clsLabel = det.vehicle_class || 'Car';
-          const speedLabel = hasValidSpeed
-            ? `${Math.round(det.speedKmh)} km/h`
-            : isCalculating ? 'CALCULATING...' : isOutOfROI ? 'OUT OF ROI' : 'N/A';
+          let speedLabel = 'CALCULATING...';
+          if (hasValidSpeed) {
+            speedLabel = `${Math.round(det.speedKmh)} km/h`;
+          } else if (isCalibReq) {
+            speedLabel = 'CALIBRATION REQUIRED';
+          } else if (isOutOfROI) {
+            speedLabel = 'OUT OF ROI';
+          } else if (isUnstable) {
+            speedLabel = 'CALIB UNSTABLE';
+          } else if (isCalculating) {
+            speedLabel = 'CALCULATING...';
+          } else if (det.speedStatus) {
+            speedLabel = det.speedStatus;
+          }
+
           const tx = `#${det.track_id} · ${clsLabel} · ${speedLabel}`;
           cx.font = 'bold 11px sans-serif';
           const tw = cx.measureText(tx).width + 12;
           const badgeX = Math.max(2, Math.min(W - tw - 2, bx + bw / 2 - tw / 2));
-          const badgeY = Math.max(4, by - 22);
+          let badgeY = by >= 25 ? by - 22 : by + bh + 4;
+
+          // Collision resolution: prevent overlapping vehicle labels near top of video
+          for (const prev of renderedBadges) {
+            const overlapX = Math.abs(badgeX - prev.x) < Math.max(tw, prev.w) * 0.85;
+            const overlapY = Math.abs(badgeY - prev.y) < 18;
+            if (overlapX && overlapY) {
+              badgeY = (by >= 25 && prev.y < by) ? prev.y - 20 : prev.y + prev.h + 2;
+            }
+          }
+          badgeY = Math.max(4, Math.min(H - 22, badgeY));
+          renderedBadges.push({ x: badgeX, y: badgeY, w: tw, h: 18 });
+
           cx.fillStyle = '#0F172AEE'; cx.strokeStyle = isSelected ? '#F59E0B' : col; cx.lineWidth = 1.5;
           cx.beginPath();
           if ((cx as any).roundRect) (cx as any).roundRect(badgeX, badgeY, tw, 18, 5);
           else cx.rect(badgeX, badgeY, tw, 18);
           cx.fill(); cx.stroke();
-          cx.fillStyle = isSelected ? '#FBBF24' : (bad ? '#FCA5A5' : isCalculating ? '#FDE68A' : !hasValidSpeed ? '#E2E8F0' : '#6EE7B7');
+          cx.fillStyle = isSelected ? '#FBBF24' : (bad ? '#FCA5A5' : isCalculating ? '#FDE68A' : !hasValidSpeed ? '#CBD5E1' : '#6EE7B7');
           cx.textAlign = 'center'; cx.fillText(tx, badgeX + tw / 2, badgeY + 13);
         });
       }
 
-      // LIVE indicator badge (top right corner)
+      // LIVE indicator badge (top right corner) — Live AI Telemetry HUD
       if (isLiveStreamingRef.current) {
-        const badge = `● REAL VIDEO — LIVE AI (ACTIVE JOB #${activeJobId || 'NONE'})`;
-        cx.font = 'bold 10px sans-serif';
+        const infFrameText = latestInferenceFrame !== null && latestInferenceFrame !== undefined ? `F#${latestInferenceFrame}` : 'F#0';
+        const fpsText = processingFps ? `${processingFps} FPS` : 'LIVE';
+        const badge = `● REAL VIDEO — LIVE AI | ${infFrameText} (${fpsText}) | JOB #${activeJobId || 'NONE'}`;
+        cx.font = 'bold 10px monospace, sans-serif';
         const bw2 = cx.measureText(badge).width + 16;
         cx.fillStyle = '#0F172AEE'; cx.strokeStyle = '#10B981'; cx.lineWidth = 1.5;
         cx.beginPath();
@@ -678,7 +762,7 @@ export const WorkbenchView: React.FC = () => {
       const jobRes = await fetch(`/api/v1/videos/${vidData.id}/jobs`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ calibration_id: null })
+        body: JSON.stringify({ calibration_id: realCalib?.id || 1 })
       });
       if (!jobRes.ok) throw new Error(`Job creation failed: ${jobRes.status}`);
       const jobData = await jobRes.json();
@@ -750,59 +834,112 @@ export const WorkbenchView: React.FC = () => {
   // =========================================================================
   const renderInspector = () => {
     if (isRealVideo) {
-      const liveFrameDets = Array.from(rtFrameBufferRef.current.values()).flat();
-      const liveTrk = liveFrameDets.find((t: any) => t.track_id === selTrack);
-      const finalTrk = realTracks.find((t: any) => t.track_id === selTrack);
-      const activeTrk = finalTrk || (realTracks.length > 0 ? realTracks[0] : null);
+      // Check final completed tracks first, then live frame buffer
+      const finalTrk = selTrack !== null
+        ? realTracks.find((t: any) => t.track_id === selTrack)
+        : (realTracks.length > 0 ? realTracks[0] : null);
 
-      if (!activeTrk && isLiveStreamingRef.current) {
+      // Collect all live detections for the selected or first tracked vehicle
+      const currentTrackId = selTrack ?? finalTrk?.track_id;
+      const allLiveInstances = Array.from(rtFrameBufferRef.current.entries())
+        .map(([fIdx, dets]) => ({
+          frame: fIdx,
+          det: dets.find((d: any) => d.track_id === (currentTrackId ?? dets[0]?.track_id))
+        }))
+        .filter(item => item.det)
+        .sort((a, b) => a.frame - b.frame);
+
+      const latestLive = allLiveInstances.length > 0 ? allLiveInstances[allLiveInstances.length - 1].det : null;
+      const targetTrackId = finalTrk?.track_id ?? latestLive?.track_id;
+
+      if (!finalTrk && !latestLive) {
         return (
           <div style={{ padding: '12px', background: '#F8FAFC', borderRadius: '8px', border: '1px solid #E2E8F0' }}>
-            <div style={{ color: '#10B981', fontWeight: 700, fontSize: '13px' }}>● LIVE DETECTION ACTIVE</div>
-            <div style={{ margin: '8px 0', fontSize: '13px', color: '#334155' }}>
-              {liveTrackCount > 0 ? `Tracking ${liveTrackCount} vehicles in real-time.` : 'LIVE DETECTION — Waiting for vehicle detections...'}
+            <div style={{ color: isLiveStreamingRef.current ? '#10B981' : '#4F46E5', fontWeight: 700, fontSize: '13px' }}>
+              {isLiveStreamingRef.current ? '● LIVE DETECTION ACTIVE' : 'LIVE DETECTION'}
             </div>
-            <div style={{ fontSize: '11px', color: '#64748B' }}>Click any vehicle bounding box on the video overlay to inspect track details.</div>
-          </div>
-        );
-      }
-
-      if (!activeTrk) {
-        return (
-          <div style={{ padding: '12px', background: '#F8FAFC', borderRadius: '8px', border: '1px solid #E2E8F0' }}>
-            <div style={{ color: '#4F46E5', fontWeight: 600, fontSize: '13px' }}>LIVE DETECTION</div>
             <div style={{ margin: '8px 0', fontSize: '12px', color: '#64748B' }}>
-              Waiting for vehicle detections...
+              {liveTrackCount > 0 ? `Tracking ${liveTrackCount} vehicles in real-time.` : 'Waiting for vehicle detections...'}
             </div>
-            <div style={{ fontSize: '11px', color: '#94A3B8' }}>Select or upload a video file to begin real-time vehicle analysis.</div>
+            <div style={{ fontSize: '11px', color: '#94A3B8' }}>Click any vehicle bounding box on the video overlay to inspect track details.</div>
           </div>
         );
       }
 
-      const sm = activeTrk.speed_measurements?.[0];
-      const speedKmh = sm?.smoothed_kmh || 0;
+      // Determine speed and history for the active track
+      let speedKmh = 0;
+      let uncertaintyKmh = 0;
+      let statusStr = 'CALCULATING...';
+      let vehicleClass = finalTrk?.vehicle_class || latestLive?.vehicle_class || 'Car';
+      let confidence = finalTrk?.confidence || latestLive?.confidence || 0.95;
+      let hist: number[] = [];
+
+      if (finalTrk) {
+        const currentVidFrame = videoRef.current ? Math.floor(videoRef.current.currentTime * (telemetry?.video_fps || 29.97)) : 0;
+        let sm = (finalTrk.speed_measurements || []).find((s: any) => s.frame === currentVidFrame);
+        if (!sm) {
+          const validSms = (finalTrk.speed_measurements || []).filter((s: any) => s.smoothed_kmh !== null && s.smoothed_kmh > 0);
+          sm = validSms.length > 0 ? validSms[validSms.length - 1] : finalTrk.speed_measurements?.[finalTrk.speed_measurements.length - 1];
+        }
+
+        speedKmh = sm?.smoothed_kmh ?? sm?.instantaneous_kmh ?? 0;
+        uncertaintyKmh = sm?.uncertainty_kmh || 0;
+        const val = sm?.error_components?.validity;
+        if (speedKmh > 0) {
+          statusStr = 'VALID';
+        } else if (val === 'CALIBRATION_REQUIRED') {
+          statusStr = 'CALIBRATION REQUIRED';
+        } else if (val === 'OUT_OF_ROI') {
+          statusStr = 'OUT OF ROI';
+        } else if (val === 'INSUFFICIENT_HISTORY' || val === 'INSUFFICIENT_DATA') {
+          statusStr = 'INSUFFICIENT TRACK HISTORY';
+        } else {
+          statusStr = val || 'CALCULATING...';
+        }
+
+        hist = (finalTrk.speed_measurements || [])
+          .map((s: any) => s.smoothed_kmh || s.instantaneous_kmh)
+          .filter((v: any) => v !== null && v !== undefined && v > 0);
+      } else if (latestLive) {
+        speedKmh = latestLive.speedKmh || 0;
+        uncertaintyKmh = latestLive.speedUncertainty || 0;
+        statusStr = latestLive.speedStatus || 'CALCULATING...';
+        if (statusStr === 'INSUFFICIENT_DATA' || statusStr === 'INSUFFICIENT_HISTORY') statusStr = 'CALCULATING...';
+        hist = allLiveInstances
+          .map(item => item.det.speedKmh)
+          .filter((spd: any) => spd !== null && spd !== undefined && spd > 0);
+      }
+
       const isBad = speedKmh > speedLimit;
-      const hist = (activeTrk.speed_measurements || [])
-        .slice(0, 30).map((s: any) => s.smoothed_kmh || 0).reverse();
 
       return (
         <div>
-          <div className="row"><b>Track #{activeTrk.track_id}</b><span className="badge">{activeTrk.vehicle_class || 'Car'}</span></div>
-          <div className="row mu"><span>Confidence</span><span>{((activeTrk.confidence || 0.95) * 100).toFixed(1)}%</span></div>
-          <div className="big" style={{ color: isBad ? '#EF4444' : '#10B981' }}>
-            {speedKmh > 0 ? speedKmh.toFixed(1) : 'CALCULATING...'} <small>{speedKmh > 0 ? `km/h ± ${(sm?.uncertainty_kmh || 0).toFixed(1)}` : ''}</small>
+          <div className="row"><b>Track #{targetTrackId}</b><span className="badge">{vehicleClass}</span></div>
+          <div className="row mu"><span>Confidence</span><span>{(confidence * 100).toFixed(1)}%</span></div>
+          <div className="big" style={{ color: speedKmh > 0 ? (isBad ? '#EF4444' : '#10B981') : '#F59E0B' }}>
+            {speedKmh > 0 ? speedKmh.toFixed(1) : statusStr} {speedKmh > 0 && <small>km/h ± {uncertaintyKmh.toFixed(1)}</small>}
           </div>
-          <div className="mu">Kalman-Smoothed Monocular Speed Estimation</div>
+          <div className="mu">
+            {speedKmh > 0 ? 'Kalman-Smoothed Monocular Speed Estimation' : statusStr === 'CALIBRATION REQUIRED' ? 'Camera calibration required for speed' : 'Accumulating space-time observations'}
+          </div>
           <canvas id="sp" width={300} height={110} style={{ margin: '8px 0' }} ref={node => {
             if (!node) return; const c = node.getContext('2d'); if (!c) return;
             c.fillStyle = '#F8FAFC'; c.fillRect(0, 0, 300, 110);
-            const lo = Math.min(...(hist.length ? hist : [0, speedLimit])) - 5;
-            const hi = Math.max(...(hist.length ? hist : [0, speedLimit])) + 5;
-            const Y = (q: number) => 105 - ((q - lo) / (hi - lo || 1)) * 100;
-            c.strokeStyle = '#EF4444'; c.setLineDash([4, 3]); c.beginPath(); c.moveTo(0, Y(speedLimit)); c.lineTo(300, Y(speedLimit)); c.stroke(); c.setLineDash([]);
-            c.strokeStyle = '#4F46E5'; c.lineWidth = 2; c.beginPath();
-            hist.forEach((q: number, i: number) => i ? c.lineTo((i * 300) / (hist.length - 1), Y(q)) : c.moveTo(0, Y(q)));
-            c.stroke(); c.fillStyle = '#64748B'; c.font = '10px sans-serif'; c.fillText('km/h vs last 3 s', 4, 10);
+            if (hist.length >= 2) {
+              const lo = Math.min(...hist, speedLimit) - 5;
+              const hi = Math.max(...hist, speedLimit) + 5;
+              const Y = (q: number) => 105 - ((q - lo) / (hi - lo || 1)) * 100;
+              c.strokeStyle = '#EF4444'; c.setLineDash([4, 3]); c.beginPath(); c.moveTo(0, Y(speedLimit)); c.lineTo(300, Y(speedLimit)); c.stroke(); c.setLineDash([]);
+              c.strokeStyle = '#4F46E5'; c.lineWidth = 2; c.beginPath();
+              hist.forEach((q: number, i: number) => i ? c.lineTo((i * 300) / (hist.length - 1), Y(q)) : c.moveTo(0, Y(q)));
+              c.stroke();
+              c.fillStyle = '#64748B'; c.font = '10px sans-serif'; c.fillText('km/h vs timeline', 4, 12);
+              c.fillStyle = '#10B981'; c.fillText(`${speedKmh.toFixed(1)} km/h`, 240, 12);
+            } else {
+              c.fillStyle = '#94A3B8'; c.font = '11px sans-serif'; c.textAlign = 'center';
+              const notice = statusStr === 'CALIBRATION REQUIRED' ? 'CALIBRATION REQUIRED FOR SPEED' : 'ACCUMULATING SPEED SAMPLES...';
+              c.fillText(notice, 150, 58);
+            }
           }} />
         </div>
       );

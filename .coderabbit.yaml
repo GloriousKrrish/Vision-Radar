@@ -1,0 +1,55 @@
+# CodeRabbit Configuration for VisionRadar
+# Automated AI Code Review, High-Speed Quality Assurance & Architectural Consistency
+language: "en"
+early_access: true
+
+reviews:
+  profile: "assertive"
+  request_changes_workflow: true
+  high_level_summary: true
+  poem: false
+  review_status: true
+  collapse_walkthrough: false
+  auto_review:
+    enabled: true
+    drafts: false
+    base_branches:
+      - "main"
+      - "master"
+      - "develop"
+
+  # Path Filters: Focus review on production code, perception engine, and API services
+  path_filters:
+    - "!node_modules/**"
+    - "!dist/**"
+    - "!*.min.*"
+    - "!data/videos/**"
+    - "!data/evidence/**"
+    - "!data/reports/**"
+    - "!models/*.onnx"
+
+  # Specialized Rule Enforcement for VisionRadar
+  tools:
+    ast-grep:
+      enabled: true
+    ruff:
+      enabled: true
+    shellcheck:
+      enabled: true
+    yamllint:
+      enabled: true
+    markdownlint:
+      enabled: true
+
+chat:
+  auto_reply: true
+
+knowledge_base:
+  opt_out: false
+  learnings:
+    - "VisionRadar uses FastAPI + SQLite WAL mode for backend telemetry."
+    - "Monocular vehicle speed estimation uses 4-point homography calibration and windowed regression."
+    - "CV models: YOLOX-Nano ONNX + ByteTrack multi-object tracker."
+    - "Always prevent N+1 SQLite query patterns and synchronous event loop blocking."
+    - "Always ensure WebSocket frame streaming queues do not drop terminal messages or deadlock background workers."
+    - "Frontend is React 18 + TypeScript 5 with dedicated requestAnimationFrame canvas rendering."

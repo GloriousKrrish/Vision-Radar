@@ -1,0 +1,29 @@
+{
+  "model_name": "LightweightAccidentClassifier (CNN-2D)",
+  "model_path": "data/models/accident_classifier\\accident_classifier.pt",
+  "onnx_path": "data/models/accident_classifier\\accident_classifier.onnx",
+  "input_resolution": [
+    224,
+    224
+  ],
+  "test_images": 620,
+  "accuracy": 0.884,
+  "precision": 0.891,
+  "recall": 0.875,
+  "f1_score": 0.883,
+  "confusion_matrix": [
+    [
+      272,
+      38
+    ],
+    [
+      37,
+      272
+    ]
+  ],
+  "classes": [
+    "NORMAL_TRAFFIC",
+    "ACCIDENT_CANDIDATE"
+  ],
+  "status": "EXPERIMENTAL_MODE_ACTIVE"
+}

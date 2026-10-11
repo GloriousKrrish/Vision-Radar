@@ -21,7 +21,7 @@ from visionradar.models.init_db import create_tables
 from visionradar.models.entities import Project, Video, Calibration, ProcessingJob, Track, SpeedMeasurement, Violation, Evidence, Experiment
 from visionradar.cv.calibration import HomographyCalibrator
 from visionradar.cv.analytics import TrafficAnalyticsEngine
-from visionradar.worker.job_worker import run_job, run_job_streaming, get_or_create_queue, drop_job_queue
+from visionradar.worker.job_worker import run_job, run_job_streaming, get_or_create_queue, drop_job_queue, cleanup_stale_job_queues
 from visionradar.services.pdf_report import PDFReportGenerator
 from apps.api.schemas import (
     ProjectCreate, ProjectResponse,
@@ -31,7 +31,14 @@ from apps.api.schemas import (
     ViolationResponse, ViolationReviewUpdate
 )
 
-from apps.api.routes_stream import router as stream_router
+try:
+    from apps.api.routes_stream import router as stream_router
+    from apps.api.routes_research import router as research_router
+except ImportError:
+    from routes_stream import router as stream_router
+    from routes_research import router as research_router
+
+
 
 # Initialize Database tables
 create_tables()
@@ -42,7 +49,28 @@ app = FastAPI(
     description="Error-Decomposed and Uncertainty-Aware Monocular Vehicle Speed Estimation Platform"
 )
 
+@app.on_event("startup")
+def startup_cleanup():
+    """Cleanup any stale RUNNING jobs from previous process restarts."""
+    db: Session = SessionLocal()
+    try:
+        stale_jobs = db.query(ProcessingJob).filter(ProcessingJob.status.in_(["RUNNING", "QUEUED"])).all()
+        for j in stale_jobs:
+            j.status = "FAILED"
+            j.stage = "Failed"
+            j.error_message = "Server restarted during job execution"
+        if stale_jobs:
+            db.commit()
+            print(f"[STARTUP] Cleaned up {len(stale_jobs)} stale job(s) from database.")
+    except Exception as e:
+        db.rollback()
+        print(f"[STARTUP ERROR] {e}")
+    finally:
+        db.close()
+
 app.include_router(stream_router)
+app.include_router(research_router)
+
 
 # Enable CORS for Frontend SPA
 app.add_middleware(
@@ -72,12 +100,18 @@ if os.path.exists(web_dist_dir):
 
 # --- System & Health Endpoints ---
 @app.get("/api/v1/health")
-def health_check():
+def health_check(db: Session = Depends(get_db)):
+    succeeded_jobs = db.query(ProcessingJob).filter(ProcessingJob.status == "SUCCEEDED").count()
+    last_job = db.query(ProcessingJob).order_by(ProcessingJob.id.desc()).first()
     return {
         "status": "online",
         "version": "0.1.0",
         "cv_engine": "active",
-        "database": "sqlite_wal"
+        "database": "sqlite_wal",
+        "pipeline_verified": succeeded_jobs > 0,
+        "succeeded_jobs": succeeded_jobs,
+        "last_job_id": last_job.id if last_job else None,
+        "last_job_status": last_job.status if last_job else None
     }
 
 @app.get("/api/v1/system/status")
@@ -110,6 +144,7 @@ def create_project(payload: ProjectCreate, db: Session = Depends(get_db)):
 # --- Videos API ---
 @app.post("/api/v1/projects/{project_id}/videos", response_model=VideoResponse)
 async def upload_video(project_id: int, file: UploadFile = File(...), db: Session = Depends(get_db)):
+    import cv2 as _cv2
     project = db.query(Project).filter(Project.id == project_id).first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
@@ -118,24 +153,45 @@ async def upload_video(project_id: int, file: UploadFile = File(...), db: Sessio
     if len(content) == 0:
         raise HTTPException(status_code=400, detail="Empty video file uploaded")
 
-    # Magic byte check for MP4/WebM/AVI/MKV
     sha256 = hashlib.sha256(content).hexdigest()
     ext = os.path.splitext(file.filename)[1].lower() or ".mp4"
     safe_filename = f"{uuid.uuid4().hex}{ext}"
     storage_path = os.path.join("data/videos", safe_filename)
+    os.makedirs(os.path.dirname(storage_path), exist_ok=True)
 
     with open(storage_path, "wb") as f:
         f.write(content)
+
+    # Extract real video metadata via OpenCV (never hardcode resolution/fps/duration)
+    vid_width, vid_height, vid_fps, vid_duration = 1920, 1080, 30.0, 10.0
+    try:
+        cap = _cv2.VideoCapture(storage_path)
+        if cap.isOpened():
+            _w = int(cap.get(_cv2.CAP_PROP_FRAME_WIDTH))
+            _h = int(cap.get(_cv2.CAP_PROP_FRAME_HEIGHT))
+            _fps = float(cap.get(_cv2.CAP_PROP_FPS))
+            _frames = int(cap.get(_cv2.CAP_PROP_FRAME_COUNT))
+            if _w > 0:
+                vid_width = _w
+            if _h > 0:
+                vid_height = _h
+            if _fps > 0:
+                vid_fps = _fps
+            if _frames > 0 and _fps > 0:
+                vid_duration = float(_frames) / _fps
+            cap.release()
+    except Exception as _ve:
+        print(f"[upload_video] OpenCV metadata extraction failed: {_ve}")
 
     video = Video(
         project_id=project_id,
         filename=file.filename,
         storage_path=storage_path,
         sha256_hash=sha256,
-        duration_sec=10.0,
-        fps=30.0,
-        width=800,
-        height=450,
+        duration_sec=round(vid_duration, 3),
+        fps=round(vid_fps, 3),
+        width=vid_width,
+        height=vid_height,
         codec="h264"
     )
     db.add(video)
@@ -223,9 +279,19 @@ async def start_processing_job(video_id: int, payload: JobCreate, background_tas
     if not video:
         raise HTTPException(status_code=404, detail="Video not found")
 
+    calib_id = payload.calibration_id
+    if not calib_id:
+        v_calib = db.query(Calibration).filter(Calibration.video_id == video_id).order_by(Calibration.version.desc()).first()
+        if v_calib:
+            calib_id = v_calib.id
+        else:
+            default_calib = db.query(Calibration).first()
+            if default_calib:
+                calib_id = default_calib.id
+
     job = ProcessingJob(
         video_id=video_id,
-        calibration_id=payload.calibration_id,
+        calibration_id=calib_id,
         config_json=payload.config_json,
         status="QUEUED",
         stage="Queued",
@@ -256,7 +322,9 @@ async def start_processing_job(video_id: int, payload: JobCreate, background_tas
         progress_pct=job.progress_pct,
         error_message=job.error_message,
         telemetry=job.telemetry_json,
-        created_at=job.created_at
+        created_at=job.created_at,
+        started_at=job.started_at,
+        completed_at=job.completed_at
     )
 
 
@@ -339,6 +407,7 @@ async def websocket_job_stream(websocket: WebSocket, job_id: int):
             db.refresh(job)
             if job.status in ("SUCCEEDED", "FAILED"):
                 drop_job_queue(job_id)
+            cleanup_stale_job_queues()
         except Exception:
             pass
         db.close()
@@ -363,7 +432,9 @@ def list_jobs(status: Optional[str] = None, db: Session = Depends(get_db)):
             progress_pct=job.progress_pct,
             error_message=job.error_message,
             telemetry=job.telemetry_json,
-            created_at=job.created_at
+            created_at=job.created_at,
+            started_at=job.started_at,
+            completed_at=job.completed_at
         )
         for job in jobs
     ]
@@ -382,7 +453,9 @@ def get_latest_job(db: Session = Depends(get_db)):
         progress_pct=job.progress_pct,
         error_message=job.error_message,
         telemetry=job.telemetry_json,
-        created_at=job.created_at
+        created_at=job.created_at,
+        started_at=job.started_at,
+        completed_at=job.completed_at
     )
 
 @app.get("/api/v1/jobs/{job_id}", response_model=JobResponse)
@@ -399,7 +472,9 @@ def get_job(job_id: int, db: Session = Depends(get_db)):
         progress_pct=job.progress_pct,
         error_message=job.error_message,
         telemetry=job.telemetry_json,
-        created_at=job.created_at
+        created_at=job.created_at,
+        started_at=job.started_at,
+        completed_at=job.completed_at
     )
 
 @app.get("/api/v1/jobs/{job_id}/tracks")
@@ -546,11 +621,27 @@ def get_track_provenance(track_id: int, db: Session = Depends(get_db)):
 
 # --- Violations API ---
 @app.get("/api/v1/violations", response_model=List[ViolationResponse])
-def list_violations(db: Session = Depends(get_db)):
-    viols = db.query(Violation).order_by(Violation.created_at.desc()).all()
+def list_violations(job_id: Optional[int] = None, limit: int = 50, db: Session = Depends(get_db)):
+    query = db.query(Violation)
+    if job_id is not None:
+        query = query.filter(Violation.job_id == job_id)
+    viols = query.order_by(Violation.id.desc()).limit(limit).all()
+    if not viols:
+        return []
+
+    viol_ids = [v.id for v in viols]
+    evidences = db.query(Evidence).filter(Evidence.violation_id.in_(viol_ids)).all()
+    ev_map = {ev.violation_id: ev for ev in evidences}
+
     res = []
     for v in viols:
-        ev = db.query(Evidence).filter(Evidence.violation_id == v.id).first()
+        ev = ev_map.get(v.id)
+        full_url = None
+        crop_url = None
+        if ev and ev.full_frame_path:
+            full_url = f"/static/evidence/{os.path.basename(os.path.dirname(ev.full_frame_path))}/event_frame.jpg"
+        if ev and ev.crop_frame_path:
+            crop_url = f"/static/evidence/{os.path.basename(os.path.dirname(ev.crop_frame_path))}/vehicle_crop.jpg"
         res.append(ViolationResponse(
             id=v.id,
             job_id=v.job_id,
@@ -564,8 +655,8 @@ def list_violations(db: Session = Depends(get_db)):
             location_label=v.location_label,
             review_status=v.review_status,
             reviewer_notes=v.reviewer_notes,
-            full_frame_url=f"/static/evidence/{os.path.basename(os.path.dirname(ev.full_frame_path))}/event_frame.jpg" if ev else None,
-            crop_frame_url=f"/static/evidence/{os.path.basename(os.path.dirname(ev.crop_frame_path))}/vehicle_crop.jpg" if ev else None,
+            full_frame_url=full_url,
+            crop_frame_url=crop_url,
             created_at=v.created_at
         ))
     return res
@@ -637,6 +728,87 @@ def get_job_events(job_id: int, db: Session = Depends(get_db)):
     telemetry = job.telemetry_json or {}
     events_summary = (telemetry.get("traffic_intelligence") or {}).get("events_summary") or {}
     return events_summary
+
+# --- Phase 13 Anomaly Intelligence Endpoints ---
+@app.get("/api/v1/jobs/{job_id}/anomalies")
+def get_job_anomalies(job_id: int, db: Session = Depends(get_db)):
+    job = db.query(ProcessingJob).filter(ProcessingJob.id == job_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    telemetry = job.telemetry_json or {}
+    anom_intel = telemetry.get("anomaly_intelligence") or {}
+    return {
+        "job_id": job_id,
+        "total_anomalies": len(anom_intel.get("anomalies", [])),
+        "anomalies": anom_intel.get("anomalies", []),
+        "provenance": anom_intel.get("provenance", {})
+    }
+
+@app.get("/api/v1/jobs/{job_id}/traffic-timeline")
+def get_job_traffic_timeline(job_id: int, db: Session = Depends(get_db)):
+    job = db.query(ProcessingJob).filter(ProcessingJob.id == job_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    telemetry = job.telemetry_json or {}
+    anom_intel = telemetry.get("anomaly_intelligence") or {}
+    return {
+        "job_id": job_id,
+        "congestion_transitions": anom_intel.get("congestion_transitions", []),
+        "risk_timeline": anom_intel.get("traffic_risk_timeline", [])
+    }
+
+@app.get("/api/v1/jobs/{job_id}/behavior")
+def get_job_behavior_profiles(job_id: int, db: Session = Depends(get_db)):
+    job = db.query(ProcessingJob).filter(ProcessingJob.id == job_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    telemetry = job.telemetry_json or {}
+    anom_intel = telemetry.get("anomaly_intelligence") or {}
+    profiles = anom_intel.get("behavior_profiles", [])
+    return {
+        "job_id": job_id,
+        "total_profiles": len(profiles),
+        "behavior_profiles": profiles
+    }
+
+@app.get("/api/v1/jobs/{job_id}/risk")
+def get_job_risk_score(job_id: int, db: Session = Depends(get_db)):
+    job = db.query(ProcessingJob).filter(ProcessingJob.id == job_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    telemetry = job.telemetry_json or {}
+    anom_intel = telemetry.get("anomaly_intelligence") or {}
+    return {
+        "job_id": job_id,
+        "risk_score": anom_intel.get("latest_risk_score", {}),
+        "risk_timeline": anom_intel.get("traffic_risk_timeline", []),
+        "disclaimer": "Analytical alert — not legal enforcement score"
+    }
+
+# --- Phase 13.1 Accident Intelligence Endpoint ---
+@app.get("/api/v1/jobs/{job_id}/accident-candidates")
+def get_job_accident_candidates(job_id: int, db: Session = Depends(get_db)):
+    job = db.query(ProcessingJob).filter(ProcessingJob.id == job_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    telemetry = job.telemetry_json or {}
+    acc_intel = telemetry.get("accident_intelligence") or {}
+    return {
+        "job_id": job_id,
+        "status": "EXPERIMENTAL_ACCIDENT_INTELLIGENCE",
+        "accident_classifier_loaded": acc_intel.get("accident_classifier_loaded", False),
+        "accident_classifier_invocations": acc_intel.get("accident_classifier_invocations", 0),
+        "candidate_frames_classified": acc_intel.get("candidate_frames_classified", 0),
+        "total_accident_candidates": len(acc_intel.get("accident_candidates", [])),
+        "accident_candidates": acc_intel.get("accident_candidates", []),
+        "disclaimer": "EXPERIMENTAL ACCIDENT INTELLIGENCE — HUMAN REVIEW REQUIRED. NOT LEGAL CONFIRMATION."
+    }
+
 
 # --- Analytics API ---
 @app.get("/api/v1/jobs/{job_id}/analytics")

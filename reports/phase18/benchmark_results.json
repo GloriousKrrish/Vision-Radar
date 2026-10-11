@@ -1,0 +1,108 @@
+{
+  "Traffic1": {
+    "video": "data/videos/Traffic1.mp4",
+    "width": 1920,
+    "height": 1080,
+    "native_fps": 29.97,
+    "frames_profiled": 90,
+    "pure_decoding_fps": 39.97,
+    "pure_decoding_ms": 25.02,
+    "detector": {
+      "mean_ms": 153.31,
+      "p95_ms": 256.4,
+      "max_ms": 414.8,
+      "fps": 6.52
+    },
+    "tracker": {
+      "mean_ms": 0.48,
+      "p95_ms": 0.66,
+      "max_ms": 4.63
+    },
+    "speed_estimation": {
+      "mean_ms": 14.98,
+      "p95_ms": 34.36
+    },
+    "intelligence": {
+      "mean_ms": 0.47,
+      "p95_ms": 0.53
+    },
+    "frame_latency": {
+      "mean_ms": 169.24,
+      "p95_ms": 267.79,
+      "max_ms": 436.88
+    },
+    "pipeline_fps": 4.94,
+    "rtf": 0.165,
+    "total_duration_s": 18.23,
+    "ram_start_mb": 70.5,
+    "ram_peak_mb": 133.8,
+    "ram_delta_mb": 63.3,
+    "finalization": {
+      "points_count": 359,
+      "cached_ms": 0.18,
+      "uncached_ms": 1075.79,
+      "speedup_factor": 6102.0
+    },
+    "tracker_metrics": {
+      "total_tracks_created": 8,
+      "active_tracks": 7,
+      "id_switches": 0,
+      "class_switches": 9,
+      "track_fragmentations": 2,
+      "total_detections_processed": 402
+    }
+  },
+  "synthetic_highway": {
+    "video": "data/videos/synthetic_highway.mp4",
+    "width": 800,
+    "height": 450,
+    "native_fps": 30.0,
+    "frames_profiled": 90,
+    "pure_decoding_fps": 130.75,
+    "pure_decoding_ms": 7.65,
+    "detector": {
+      "mean_ms": 150.07,
+      "p95_ms": 213.32,
+      "max_ms": 251.82,
+      "fps": 6.66
+    },
+    "tracker": {
+      "mean_ms": 0.51,
+      "p95_ms": 0.75,
+      "max_ms": 4.75
+    },
+    "speed_estimation": {
+      "mean_ms": 13.93,
+      "p95_ms": 40.81
+    },
+    "intelligence": {
+      "mean_ms": 0.56,
+      "p95_ms": 0.41
+    },
+    "frame_latency": {
+      "mean_ms": 165.07,
+      "p95_ms": 235.18,
+      "max_ms": 278.07
+    },
+    "pipeline_fps": 5.71,
+    "rtf": 0.19,
+    "total_duration_s": 15.77,
+    "ram_start_mb": 86.2,
+    "ram_peak_mb": 127.7,
+    "ram_delta_mb": 41.4,
+    "finalization": {
+      "points_count": 338,
+      "cached_ms": 0.15,
+      "uncached_ms": 986.53,
+      "speedup_factor": 6435.3
+    },
+    "tracker_metrics": {
+      "total_tracks_created": 8,
+      "active_tracks": 7,
+      "id_switches": 0,
+      "class_switches": 5,
+      "track_fragmentations": 2,
+      "total_detections_processed": 400
+    }
+  }
+}

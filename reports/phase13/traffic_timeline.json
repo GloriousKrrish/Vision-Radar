@@ -1,0 +1,113 @@
+{
+  "Traffic1.mp4": {
+    "risk_timeline": [
+      {
+        "overall_risk_score": 0.0,
+        "risk_level": "LOW",
+        "timestamp": 0.0,
+        "frame_index": 0,
+        "contributing_factors": [],
+        "policy_version": "v1.0.0",
+        "disclaimer": "Analytical alert \u2014 not legal enforcement score"
+      },
+      {
+        "overall_risk_score": 0.0,
+        "risk_level": "LOW",
+        "timestamp": 0.33,
+        "frame_index": 10,
+        "contributing_factors": [],
+        "policy_version": "v1.0.0",
+        "disclaimer": "Analytical alert \u2014 not legal enforcement score"
+      }
+    ],
+    "congestion_transitions": [
+      {
+        "transition_id": "trans_4_FREE_FLOW_to_MODERATE",
+        "from_state": "FREE_FLOW",
+        "to_state": "MODERATE",
+        "timestamp": 0.13346680013346682,
+        "frame_index": 4,
+        "trigger_reason": "Congestion worsened from FREE_FLOW to MODERATE",
+        "avg_speed_kmh": 45.0,
+        "density_veh_km": 40.0,
+        "occupancy": 9.0,
+        "active_queue_count": 0,
+        "policy_version": "v1.0.0"
+      }
+    ]
+  },
+  "synthetic_highway.mp4": {
+    "risk_timeline": [
+      {
+        "overall_risk_score": 0.0,
+        "risk_level": "LOW",
+        "timestamp": 0.0,
+        "frame_index": 0,
+        "contributing_factors": [],
+        "policy_version": "v1.0.0",
+        "disclaimer": "Analytical alert \u2014 not legal enforcement score"
+      },
+      {
+        "overall_risk_score": 0.0,
+        "risk_level": "LOW",
+        "timestamp": 0.33,
+        "frame_index": 10,
+        "contributing_factors": [],
+        "policy_version": "v1.0.0",
+        "disclaimer": "Analytical alert \u2014 not legal enforcement score"
+      }
+    ],
+    "congestion_transitions": [
+      {
+        "transition_id": "trans_6_FREE_FLOW_to_MODERATE",
+        "from_state": "FREE_FLOW",
+        "to_state": "MODERATE",
+        "timestamp": 0.2,
+        "frame_index": 6,
+        "trigger_reason": "Congestion worsened from FREE_FLOW to MODERATE",
+        "avg_speed_kmh": 45.0,
+        "density_veh_km": 33.333333333333336,
+        "occupancy": 7.5,
+        "active_queue_count": 0,
+        "policy_version": "v1.0.0"
+      }
+    ]
+  },
+  "009c25df725e45e5b4e6701839233a88.mp4": {
+    "risk_timeline": [
+      {
+        "overall_risk_score": 0.0,
+        "risk_level": "LOW",
+        "timestamp": 0.0,
+        "frame_index": 0,
+        "contributing_factors": [],
+        "policy_version": "v1.0.0",
+        "disclaimer": "Analytical alert \u2014 not legal enforcement score"
+      },
+      {
+        "overall_risk_score": 0.0,
+        "risk_level": "LOW",
+        "timestamp": 0.33,
+        "frame_index": 10,
+        "contributing_factors": [],
+        "policy_version": "v1.0.0",
+        "disclaimer": "Analytical alert \u2014 not legal enforcement score"
+      }
+    ],
+    "congestion_transitions": [
+      {
+        "transition_id": "trans_4_FREE_FLOW_to_MODERATE",
+        "from_state": "FREE_FLOW",
+        "to_state": "MODERATE",
+        "timestamp": 0.13346680013346682,
+        "frame_index": 4,
+        "trigger_reason": "Congestion worsened from FREE_FLOW to MODERATE",
+        "avg_speed_kmh": 45.0,
+        "density_veh_km": 40.0,
+        "occupancy": 9.0,
+        "active_queue_count": 0,
+        "policy_version": "v1.0.0"
+      }
+    ]
+  }
+}

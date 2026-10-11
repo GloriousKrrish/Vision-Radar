@@ -1,0 +1,6 @@
+pip install fastapi uvicorn onnxruntime opencv-python sqlalchemy pydantic numpy pytest
+
+
+cd apps/web
+npm install
+cd ../..

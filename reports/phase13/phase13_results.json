@@ -1,0 +1,1089 @@
+{
+  "video_evaluations": [
+    {
+      "video_filename": "Traffic1.mp4",
+      "duration_sec": 0.67,
+      "frames": 20,
+      "tracks": 6,
+      "anomalies": 5,
+      "events": 6,
+      "congestion_transitions": 1,
+      "queues": 0,
+      "stopped_vehicles": 0,
+      "wrong_way_events": 0,
+      "evidence_generated": 5,
+      "anomalies_list": [
+        {
+          "anomaly_id": "anom_td_trk4",
+          "track_id": 4,
+          "anomaly_type": "TRAJECTORY_DEVIATION",
+          "severity": "MEDIUM",
+          "score": 0.65,
+          "confidence": 0.85,
+          "start_frame": 0,
+          "end_frame": 18,
+          "timestamp": 0.0,
+          "duration_sec": 0.63,
+          "method": "STATISTICAL_ZSCORE",
+          "explanation": "Track #4 trajectory smoothness (0.96) deviates significantly with high curvature (0.94).",
+          "evidence_frame_indices": [
+            0,
+            9
+          ],
+          "feature_contributions": {
+            "trajectory_smoothness": 0.9614,
+            "path_curvature": 0.9373
+          },
+          "policy_version": "v1.0.0",
+          "validation_status": "ENGINEERING-VALIDATED"
+        },
+        {
+          "anomaly_id": "anom_td_trk5",
+          "track_id": 5,
+          "anomaly_type": "TRAJECTORY_DEVIATION",
+          "severity": "HIGH",
+          "score": 0.8,
+          "confidence": 0.85,
+          "start_frame": 0,
+          "end_frame": 17,
+          "timestamp": 0.0,
+          "duration_sec": 0.57,
+          "method": "STATISTICAL_ZSCORE",
+          "explanation": "Track #5 trajectory smoothness (0.70) deviates significantly with high curvature (1.00).",
+          "evidence_frame_indices": [
+            0,
+            8
+          ],
+          "feature_contributions": {
+            "trajectory_smoothness": 0.6966,
+            "path_curvature": 0.9998
+          },
+          "policy_version": "v1.0.0",
+          "validation_status": "ENGINEERING-VALIDATED"
+        },
+        {
+          "anomaly_id": "anom_zscore_trk5",
+          "track_id": 5,
+          "anomaly_type": "UNUSUAL_VEHICLE_BEHAVIOR",
+          "severity": "MEDIUM",
+          "score": 0.99,
+          "confidence": 0.88,
+          "start_frame": 0,
+          "end_frame": 17,
+          "timestamp": 0.0,
+          "duration_sec": 0.57,
+          "method": "STATISTICAL_ZSCORE",
+          "explanation": "Track #5 trajectory smoothness is 6.4 MADs from population median (0.93).",
+          "evidence_frame_indices": [
+            0
+          ],
+          "feature_contributions": {
+            "z_score_smoothness": 6.36
+          },
+          "policy_version": "v1.0.0",
+          "validation_status": "ENGINEERING-VALIDATED"
+        },
+        {
+          "anomaly_id": "anom_td_trk6",
+          "track_id": 6,
+          "anomaly_type": "TRAJECTORY_DEVIATION",
+          "severity": "HIGH",
+          "score": 0.95,
+          "confidence": 0.85,
+          "start_frame": 0,
+          "end_frame": 15,
+          "timestamp": 0.0,
+          "duration_sec": 0.5,
+          "method": "STATISTICAL_ZSCORE",
+          "explanation": "Track #6 trajectory smoothness (0.68) deviates significantly with high curvature (1.90).",
+          "evidence_frame_indices": [
+            0,
+            7
+          ],
+          "feature_contributions": {
+            "trajectory_smoothness": 0.6803,
+            "path_curvature": 1.9015
+          },
+          "policy_version": "v1.0.0",
+          "validation_status": "ENGINEERING-VALIDATED"
+        },
+        {
+          "anomaly_id": "anom_zscore_trk6",
+          "track_id": 6,
+          "anomaly_type": "UNUSUAL_VEHICLE_BEHAVIOR",
+          "severity": "MEDIUM",
+          "score": 0.99,
+          "confidence": 0.88,
+          "start_frame": 0,
+          "end_frame": 15,
+          "timestamp": 0.0,
+          "duration_sec": 0.5,
+          "method": "STATISTICAL_ZSCORE",
+          "explanation": "Track #6 trajectory smoothness is 6.8 MADs from population median (0.93).",
+          "evidence_frame_indices": [
+            0
+          ],
+          "feature_contributions": {
+            "z_score_smoothness": 6.79
+          },
+          "policy_version": "v1.0.0",
+          "validation_status": "ENGINEERING-VALIDATED"
+        }
+      ],
+      "behavior_profiles": [
+        {
+          "track_id": 1,
+          "vehicle_class": "Car",
+          "track_duration_sec": 0.63,
+          "assigned_lane": "Lane 1",
+          "primary_movement": "DECELERATING",
+          "stops_count": 0,
+          "stop_duration_sec": 0.07,
+          "lane_changes_count": 0,
+          "trajectory_smoothness": 0.931,
+          "path_curvature": 0.526,
+          "overall_anomaly_score": 0.0,
+          "behavior_status": "NORMAL",
+          "anomalies_flagged": [],
+          "risk_contribution": 0.0
+        },
+        {
+          "track_id": 2,
+          "vehicle_class": "Car",
+          "track_duration_sec": 0.63,
+          "assigned_lane": "Lane 1",
+          "primary_movement": "DECELERATING",
+          "stops_count": 0,
+          "stop_duration_sec": 0.1,
+          "lane_changes_count": 0,
+          "trajectory_smoothness": 0.937,
+          "path_curvature": 0.4,
+          "overall_anomaly_score": 0.0,
+          "behavior_status": "NORMAL",
+          "anomalies_flagged": [],
+          "risk_contribution": 0.0
+        },
+        {
+          "track_id": 3,
+          "vehicle_class": "Car",
+          "track_duration_sec": 0.63,
+          "assigned_lane": "Lane 1",
+          "primary_movement": "DECELERATING",
+          "stops_count": 0,
+          "stop_duration_sec": 0.17,
+          "lane_changes_count": 0,
+          "trajectory_smoothness": 0.981,
+          "path_curvature": 0.271,
+          "overall_anomaly_score": 0.0,
+          "behavior_status": "NORMAL",
+          "anomalies_flagged": [],
+          "risk_contribution": 0.0
+        },
+        {
+          "track_id": 4,
+          "vehicle_class": "Car",
+          "track_duration_sec": 0.63,
+          "assigned_lane": "Lane 1",
+          "primary_movement": "DECELERATING",
+          "stops_count": 0,
+          "stop_duration_sec": 0.43,
+          "lane_changes_count": 0,
+          "trajectory_smoothness": 0.961,
+          "path_curvature": 0.937,
+          "overall_anomaly_score": 0.65,
+          "behavior_status": "ABNORMAL",
+          "anomalies_flagged": [
+            "TRAJECTORY_DEVIATION"
+          ],
+          "risk_contribution": 19.5
+        },
+        {
+          "track_id": 5,
+          "vehicle_class": "Car",
+          "track_duration_sec": 0.57,
+          "assigned_lane": "Lane 1",
+          "primary_movement": "DECELERATING",
+          "stops_count": 0,
+          "stop_duration_sec": 0.13,
+          "lane_changes_count": 0,
+          "trajectory_smoothness": 0.697,
+          "path_curvature": 1.0,
+          "overall_anomaly_score": 0.99,
+          "behavior_status": "ABNORMAL",
+          "anomalies_flagged": [
+            "TRAJECTORY_DEVIATION",
+            "UNUSUAL_VEHICLE_BEHAVIOR"
+          ],
+          "risk_contribution": 29.7
+        },
+        {
+          "track_id": 6,
+          "vehicle_class": "Car",
+          "track_duration_sec": 0.5,
+          "assigned_lane": "Lane 1",
+          "primary_movement": "DECELERATING",
+          "stops_count": 0,
+          "stop_duration_sec": 0.4,
+          "lane_changes_count": 0,
+          "trajectory_smoothness": 0.68,
+          "path_curvature": 1.901,
+          "overall_anomaly_score": 0.99,
+          "behavior_status": "ABNORMAL",
+          "anomalies_flagged": [
+            "TRAJECTORY_DEVIATION",
+            "UNUSUAL_VEHICLE_BEHAVIOR"
+          ],
+          "risk_contribution": 29.7
+        }
+      ],
+      "risk_timeline": [
+        {
+          "overall_risk_score": 0.0,
+          "risk_level": "LOW",
+          "timestamp": 0.0,
+          "frame_index": 0,
+          "contributing_factors": [],
+          "policy_version": "v1.0.0",
+          "disclaimer": "Analytical alert \u2014 not legal enforcement score"
+        },
+        {
+          "overall_risk_score": 0.0,
+          "risk_level": "LOW",
+          "timestamp": 0.33,
+          "frame_index": 10,
+          "contributing_factors": [],
+          "policy_version": "v1.0.0",
+          "disclaimer": "Analytical alert \u2014 not legal enforcement score"
+        }
+      ],
+      "congestion_transitions_list": [
+        {
+          "transition_id": "trans_4_FREE_FLOW_to_MODERATE",
+          "from_state": "FREE_FLOW",
+          "to_state": "MODERATE",
+          "timestamp": 0.13346680013346682,
+          "frame_index": 4,
+          "trigger_reason": "Congestion worsened from FREE_FLOW to MODERATE",
+          "avg_speed_kmh": 45.0,
+          "density_veh_km": 40.0,
+          "occupancy": 9.0,
+          "active_queue_count": 0,
+          "policy_version": "v1.0.0"
+        }
+      ]
+    },
+    {
+      "video_filename": "synthetic_highway.mp4",
+      "duration_sec": 0.67,
+      "frames": 20,
+      "tracks": 6,
+      "anomalies": 2,
+      "events": 3,
+      "congestion_transitions": 1,
+      "queues": 0,
+      "stopped_vehicles": 0,
+      "wrong_way_events": 0,
+      "evidence_generated": 2,
+      "anomalies_list": [
+        {
+          "anomaly_id": "anom_td_trk3",
+          "track_id": 3,
+          "anomaly_type": "TRAJECTORY_DEVIATION",
+          "severity": "MEDIUM",
+          "score": 0.65,
+          "confidence": 0.85,
+          "start_frame": 0,
+          "end_frame": 18,
+          "timestamp": 0.0,
+          "duration_sec": 0.63,
+          "method": "STATISTICAL_ZSCORE",
+          "explanation": "Track #3 trajectory smoothness (0.87) deviates significantly with high curvature (0.82).",
+          "evidence_frame_indices": [
+            0,
+            9
+          ],
+          "feature_contributions": {
+            "trajectory_smoothness": 0.873,
+            "path_curvature": 0.8167
+          },
+          "policy_version": "v1.0.0",
+          "validation_status": "ENGINEERING-VALIDATED"
+        },
+        {
+          "anomaly_id": "anom_td_trk6",
+          "track_id": 6,
+          "anomaly_type": "TRAJECTORY_DEVIATION",
+          "severity": "HIGH",
+          "score": 0.83,
+          "confidence": 0.85,
+          "start_frame": 0,
+          "end_frame": 3,
+          "timestamp": 0.0,
+          "duration_sec": 0.1,
+          "method": "STATISTICAL_ZSCORE",
+          "explanation": "Track #6 trajectory smoothness (0.79) deviates significantly with high curvature (1.25).",
+          "evidence_frame_indices": [
+            0,
+            1
+          ],
+          "feature_contributions": {
+            "trajectory_smoothness": 0.7898,
+            "path_curvature": 1.249
+          },
+          "policy_version": "v1.0.0",
+          "validation_status": "ENGINEERING-VALIDATED"
+        }
+      ],
+      "behavior_profiles": [
+        {
+          "track_id": 1,
+          "vehicle_class": "Car",
+          "track_duration_sec": 0.63,
+          "assigned_lane": "Lane 1",
+          "primary_movement": "DECELERATING",
+          "stops_count": 0,
+          "stop_duration_sec": 0.1,
+          "lane_changes_count": 0,
+          "trajectory_smoothness": 0.907,
+          "path_curvature": 0.524,
+          "overall_anomaly_score": 0.0,
+          "behavior_status": "NORMAL",
+          "anomalies_flagged": [],
+          "risk_contribution": 0.0
+        },
+        {
+          "track_id": 2,
+          "vehicle_class": "Car",
+          "track_duration_sec": 0.63,
+          "assigned_lane": "Lane 1",
+          "primary_movement": "DECELERATING",
+          "stops_count": 0,
+          "stop_duration_sec": 0.17,
+          "lane_changes_count": 0,
+          "trajectory_smoothness": 0.972,
+          "path_curvature": 0.314,
+          "overall_anomaly_score": 0.0,
+          "behavior_status": "NORMAL",
+          "anomalies_flagged": [],
+          "risk_contribution": 0.0
+        },
+        {
+          "track_id": 3,
+          "vehicle_class": "Car",
+          "track_duration_sec": 0.63,
+          "assigned_lane": "Lane 1",
+          "primary_movement": "DECELERATING",
+          "stops_count": 0,
+          "stop_duration_sec": 0.07,
+          "lane_changes_count": 0,
+          "trajectory_smoothness": 0.873,
+          "path_curvature": 0.817,
+          "overall_anomaly_score": 0.65,
+          "behavior_status": "ABNORMAL",
+          "anomalies_flagged": [
+            "TRAJECTORY_DEVIATION"
+          ],
+          "risk_contribution": 19.5
+        },
+        {
+          "track_id": 4,
+          "vehicle_class": "Car",
+          "track_duration_sec": 0.57,
+          "assigned_lane": "Lane 1",
+          "primary_movement": "DECELERATING",
+          "stops_count": 0,
+          "stop_duration_sec": 0.13,
+          "lane_changes_count": 0,
+          "trajectory_smoothness": 0.702,
+          "path_curvature": 0.67,
+          "overall_anomaly_score": 0.0,
+          "behavior_status": "NORMAL",
+          "anomalies_flagged": [],
+          "risk_contribution": 0.0
+        },
+        {
+          "track_id": 5,
+          "vehicle_class": "Car",
+          "track_duration_sec": 0.5,
+          "assigned_lane": "Lane 1",
+          "primary_movement": "DECELERATING",
+          "stops_count": 0,
+          "stop_duration_sec": 0.43,
+          "lane_changes_count": 0,
+          "trajectory_smoothness": 0.997,
+          "path_curvature": 0.165,
+          "overall_anomaly_score": 0.0,
+          "behavior_status": "NORMAL",
+          "anomalies_flagged": [],
+          "risk_contribution": 0.0
+        },
+        {
+          "track_id": 6,
+          "vehicle_class": "Car",
+          "track_duration_sec": 0.1,
+          "assigned_lane": "Lane 1",
+          "primary_movement": "MANEUVERING",
+          "stops_count": 0,
+          "stop_duration_sec": 0.0,
+          "lane_changes_count": 0,
+          "trajectory_smoothness": 0.79,
+          "path_curvature": 1.249,
+          "overall_anomaly_score": 0.83,
+          "behavior_status": "ABNORMAL",
+          "anomalies_flagged": [
+            "TRAJECTORY_DEVIATION"
+          ],
+          "risk_contribution": 24.9
+        }
+      ],
+      "risk_timeline": [
+        {
+          "overall_risk_score": 0.0,
+          "risk_level": "LOW",
+          "timestamp": 0.0,
+          "frame_index": 0,
+          "contributing_factors": [],
+          "policy_version": "v1.0.0",
+          "disclaimer": "Analytical alert \u2014 not legal enforcement score"
+        },
+        {
+          "overall_risk_score": 0.0,
+          "risk_level": "LOW",
+          "timestamp": 0.33,
+          "frame_index": 10,
+          "contributing_factors": [],
+          "policy_version": "v1.0.0",
+          "disclaimer": "Analytical alert \u2014 not legal enforcement score"
+        }
+      ],
+      "congestion_transitions_list": [
+        {
+          "transition_id": "trans_6_FREE_FLOW_to_MODERATE",
+          "from_state": "FREE_FLOW",
+          "to_state": "MODERATE",
+          "timestamp": 0.2,
+          "frame_index": 6,
+          "trigger_reason": "Congestion worsened from FREE_FLOW to MODERATE",
+          "avg_speed_kmh": 45.0,
+          "density_veh_km": 33.333333333333336,
+          "occupancy": 7.5,
+          "active_queue_count": 0,
+          "policy_version": "v1.0.0"
+        }
+      ]
+    },
+    {
+      "video_filename": "009c25df725e45e5b4e6701839233a88.mp4",
+      "duration_sec": 0.67,
+      "frames": 20,
+      "tracks": 6,
+      "anomalies": 5,
+      "events": 6,
+      "congestion_transitions": 1,
+      "queues": 0,
+      "stopped_vehicles": 0,
+      "wrong_way_events": 0,
+      "evidence_generated": 5,
+      "anomalies_list": [
+        {
+          "anomaly_id": "anom_td_trk4",
+          "track_id": 4,
+          "anomaly_type": "TRAJECTORY_DEVIATION",
+          "severity": "MEDIUM",
+          "score": 0.65,
+          "confidence": 0.85,
+          "start_frame": 0,
+          "end_frame": 18,
+          "timestamp": 0.0,
+          "duration_sec": 0.63,
+          "method": "STATISTICAL_ZSCORE",
+          "explanation": "Track #4 trajectory smoothness (0.96) deviates significantly with high curvature (0.94).",
+          "evidence_frame_indices": [
+            0,
+            9
+          ],
+          "feature_contributions": {
+            "trajectory_smoothness": 0.9614,
+            "path_curvature": 0.9373
+          },
+          "policy_version": "v1.0.0",
+          "validation_status": "ENGINEERING-VALIDATED"
+        },
+        {
+          "anomaly_id": "anom_td_trk5",
+          "track_id": 5,
+          "anomaly_type": "TRAJECTORY_DEVIATION",
+          "severity": "HIGH",
+          "score": 0.8,
+          "confidence": 0.85,
+          "start_frame": 0,
+          "end_frame": 17,
+          "timestamp": 0.0,
+          "duration_sec": 0.57,
+          "method": "STATISTICAL_ZSCORE",
+          "explanation": "Track #5 trajectory smoothness (0.70) deviates significantly with high curvature (1.00).",
+          "evidence_frame_indices": [
+            0,
+            8
+          ],
+          "feature_contributions": {
+            "trajectory_smoothness": 0.6966,
+            "path_curvature": 0.9998
+          },
+          "policy_version": "v1.0.0",
+          "validation_status": "ENGINEERING-VALIDATED"
+        },
+        {
+          "anomaly_id": "anom_zscore_trk5",
+          "track_id": 5,
+          "anomaly_type": "UNUSUAL_VEHICLE_BEHAVIOR",
+          "severity": "MEDIUM",
+          "score": 0.99,
+          "confidence": 0.88,
+          "start_frame": 0,
+          "end_frame": 17,
+          "timestamp": 0.0,
+          "duration_sec": 0.57,
+          "method": "STATISTICAL_ZSCORE",
+          "explanation": "Track #5 trajectory smoothness is 6.4 MADs from population median (0.93).",
+          "evidence_frame_indices": [
+            0
+          ],
+          "feature_contributions": {
+            "z_score_smoothness": 6.36
+          },
+          "policy_version": "v1.0.0",
+          "validation_status": "ENGINEERING-VALIDATED"
+        },
+        {
+          "anomaly_id": "anom_td_trk6",
+          "track_id": 6,
+          "anomaly_type": "TRAJECTORY_DEVIATION",
+          "severity": "HIGH",
+          "score": 0.95,
+          "confidence": 0.85,
+          "start_frame": 0,
+          "end_frame": 15,
+          "timestamp": 0.0,
+          "duration_sec": 0.5,
+          "method": "STATISTICAL_ZSCORE",
+          "explanation": "Track #6 trajectory smoothness (0.68) deviates significantly with high curvature (1.90).",
+          "evidence_frame_indices": [
+            0,
+            7
+          ],
+          "feature_contributions": {
+            "trajectory_smoothness": 0.6803,
+            "path_curvature": 1.9015
+          },
+          "policy_version": "v1.0.0",
+          "validation_status": "ENGINEERING-VALIDATED"
+        },
+        {
+          "anomaly_id": "anom_zscore_trk6",
+          "track_id": 6,
+          "anomaly_type": "UNUSUAL_VEHICLE_BEHAVIOR",
+          "severity": "MEDIUM",
+          "score": 0.99,
+          "confidence": 0.88,
+          "start_frame": 0,
+          "end_frame": 15,
+          "timestamp": 0.0,
+          "duration_sec": 0.5,
+          "method": "STATISTICAL_ZSCORE",
+          "explanation": "Track #6 trajectory smoothness is 6.8 MADs from population median (0.93).",
+          "evidence_frame_indices": [
+            0
+          ],
+          "feature_contributions": {
+            "z_score_smoothness": 6.79
+          },
+          "policy_version": "v1.0.0",
+          "validation_status": "ENGINEERING-VALIDATED"
+        }
+      ],
+      "behavior_profiles": [
+        {
+          "track_id": 1,
+          "vehicle_class": "Car",
+          "track_duration_sec": 0.63,
+          "assigned_lane": "Lane 1",
+          "primary_movement": "DECELERATING",
+          "stops_count": 0,
+          "stop_duration_sec": 0.07,
+          "lane_changes_count": 0,
+          "trajectory_smoothness": 0.931,
+          "path_curvature": 0.526,
+          "overall_anomaly_score": 0.0,
+          "behavior_status": "NORMAL",
+          "anomalies_flagged": [],
+          "risk_contribution": 0.0
+        },
+        {
+          "track_id": 2,
+          "vehicle_class": "Car",
+          "track_duration_sec": 0.63,
+          "assigned_lane": "Lane 1",
+          "primary_movement": "DECELERATING",
+          "stops_count": 0,
+          "stop_duration_sec": 0.1,
+          "lane_changes_count": 0,
+          "trajectory_smoothness": 0.937,
+          "path_curvature": 0.4,
+          "overall_anomaly_score": 0.0,
+          "behavior_status": "NORMAL",
+          "anomalies_flagged": [],
+          "risk_contribution": 0.0
+        },
+        {
+          "track_id": 3,
+          "vehicle_class": "Car",
+          "track_duration_sec": 0.63,
+          "assigned_lane": "Lane 1",
+          "primary_movement": "DECELERATING",
+          "stops_count": 0,
+          "stop_duration_sec": 0.17,
+          "lane_changes_count": 0,
+          "trajectory_smoothness": 0.981,
+          "path_curvature": 0.271,
+          "overall_anomaly_score": 0.0,
+          "behavior_status": "NORMAL",
+          "anomalies_flagged": [],
+          "risk_contribution": 0.0
+        },
+        {
+          "track_id": 4,
+          "vehicle_class": "Car",
+          "track_duration_sec": 0.63,
+          "assigned_lane": "Lane 1",
+          "primary_movement": "DECELERATING",
+          "stops_count": 0,
+          "stop_duration_sec": 0.43,
+          "lane_changes_count": 0,
+          "trajectory_smoothness": 0.961,
+          "path_curvature": 0.937,
+          "overall_anomaly_score": 0.65,
+          "behavior_status": "ABNORMAL",
+          "anomalies_flagged": [
+            "TRAJECTORY_DEVIATION"
+          ],
+          "risk_contribution": 19.5
+        },
+        {
+          "track_id": 5,
+          "vehicle_class": "Car",
+          "track_duration_sec": 0.57,
+          "assigned_lane": "Lane 1",
+          "primary_movement": "DECELERATING",
+          "stops_count": 0,
+          "stop_duration_sec": 0.13,
+          "lane_changes_count": 0,
+          "trajectory_smoothness": 0.697,
+          "path_curvature": 1.0,
+          "overall_anomaly_score": 0.99,
+          "behavior_status": "ABNORMAL",
+          "anomalies_flagged": [
+            "TRAJECTORY_DEVIATION",
+            "UNUSUAL_VEHICLE_BEHAVIOR"
+          ],
+          "risk_contribution": 29.7
+        },
+        {
+          "track_id": 6,
+          "vehicle_class": "Car",
+          "track_duration_sec": 0.5,
+          "assigned_lane": "Lane 1",
+          "primary_movement": "DECELERATING",
+          "stops_count": 0,
+          "stop_duration_sec": 0.4,
+          "lane_changes_count": 0,
+          "trajectory_smoothness": 0.68,
+          "path_curvature": 1.901,
+          "overall_anomaly_score": 0.99,
+          "behavior_status": "ABNORMAL",
+          "anomalies_flagged": [
+            "TRAJECTORY_DEVIATION",
+            "UNUSUAL_VEHICLE_BEHAVIOR"
+          ],
+          "risk_contribution": 29.7
+        }
+      ],
+      "risk_timeline": [
+        {
+          "overall_risk_score": 0.0,
+          "risk_level": "LOW",
+          "timestamp": 0.0,
+          "frame_index": 0,
+          "contributing_factors": [],
+          "policy_version": "v1.0.0",
+          "disclaimer": "Analytical alert \u2014 not legal enforcement score"
+        },
+        {
+          "overall_risk_score": 0.0,
+          "risk_level": "LOW",
+          "timestamp": 0.33,
+          "frame_index": 10,
+          "contributing_factors": [],
+          "policy_version": "v1.0.0",
+          "disclaimer": "Analytical alert \u2014 not legal enforcement score"
+        }
+      ],
+      "congestion_transitions_list": [
+        {
+          "transition_id": "trans_4_FREE_FLOW_to_MODERATE",
+          "from_state": "FREE_FLOW",
+          "to_state": "MODERATE",
+          "timestamp": 0.13346680013346682,
+          "frame_index": 4,
+          "trigger_reason": "Congestion worsened from FREE_FLOW to MODERATE",
+          "avg_speed_kmh": 45.0,
+          "density_veh_km": 40.0,
+          "occupancy": 9.0,
+          "active_queue_count": 0,
+          "policy_version": "v1.0.0"
+        }
+      ]
+    },
+    {
+      "video_filename": "009c25df725e45e5b4e6701839233a88.mp4",
+      "duration_sec": 0.67,
+      "frames": 20,
+      "tracks": 6,
+      "anomalies": 5,
+      "events": 6,
+      "congestion_transitions": 1,
+      "queues": 0,
+      "stopped_vehicles": 0,
+      "wrong_way_events": 0,
+      "evidence_generated": 5,
+      "anomalies_list": [
+        {
+          "anomaly_id": "anom_td_trk4",
+          "track_id": 4,
+          "anomaly_type": "TRAJECTORY_DEVIATION",
+          "severity": "MEDIUM",
+          "score": 0.65,
+          "confidence": 0.85,
+          "start_frame": 0,
+          "end_frame": 18,
+          "timestamp": 0.0,
+          "duration_sec": 0.63,
+          "method": "STATISTICAL_ZSCORE",
+          "explanation": "Track #4 trajectory smoothness (0.96) deviates significantly with high curvature (0.94).",
+          "evidence_frame_indices": [
+            0,
+            9
+          ],
+          "feature_contributions": {
+            "trajectory_smoothness": 0.9614,
+            "path_curvature": 0.9373
+          },
+          "policy_version": "v1.0.0",
+          "validation_status": "ENGINEERING-VALIDATED"
+        },
+        {
+          "anomaly_id": "anom_td_trk5",
+          "track_id": 5,
+          "anomaly_type": "TRAJECTORY_DEVIATION",
+          "severity": "HIGH",
+          "score": 0.8,
+          "confidence": 0.85,
+          "start_frame": 0,
+          "end_frame": 17,
+          "timestamp": 0.0,
+          "duration_sec": 0.57,
+          "method": "STATISTICAL_ZSCORE",
+          "explanation": "Track #5 trajectory smoothness (0.70) deviates significantly with high curvature (1.00).",
+          "evidence_frame_indices": [
+            0,
+            8
+          ],
+          "feature_contributions": {
+            "trajectory_smoothness": 0.6966,
+            "path_curvature": 0.9998
+          },
+          "policy_version": "v1.0.0",
+          "validation_status": "ENGINEERING-VALIDATED"
+        },
+        {
+          "anomaly_id": "anom_zscore_trk5",
+          "track_id": 5,
+          "anomaly_type": "UNUSUAL_VEHICLE_BEHAVIOR",
+          "severity": "MEDIUM",
+          "score": 0.99,
+          "confidence": 0.88,
+          "start_frame": 0,
+          "end_frame": 17,
+          "timestamp": 0.0,
+          "duration_sec": 0.57,
+          "method": "STATISTICAL_ZSCORE",
+          "explanation": "Track #5 trajectory smoothness is 6.4 MADs from population median (0.93).",
+          "evidence_frame_indices": [
+            0
+          ],
+          "feature_contributions": {
+            "z_score_smoothness": 6.36
+          },
+          "policy_version": "v1.0.0",
+          "validation_status": "ENGINEERING-VALIDATED"
+        },
+        {
+          "anomaly_id": "anom_td_trk6",
+          "track_id": 6,
+          "anomaly_type": "TRAJECTORY_DEVIATION",
+          "severity": "HIGH",
+          "score": 0.95,
+          "confidence": 0.85,
+          "start_frame": 0,
+          "end_frame": 15,
+          "timestamp": 0.0,
+          "duration_sec": 0.5,
+          "method": "STATISTICAL_ZSCORE",
+          "explanation": "Track #6 trajectory smoothness (0.68) deviates significantly with high curvature (1.90).",
+          "evidence_frame_indices": [
+            0,
+            7
+          ],
+          "feature_contributions": {
+            "trajectory_smoothness": 0.6803,
+            "path_curvature": 1.9015
+          },
+          "policy_version": "v1.0.0",
+          "validation_status": "ENGINEERING-VALIDATED"
+        },
+        {
+          "anomaly_id": "anom_zscore_trk6",
+          "track_id": 6,
+          "anomaly_type": "UNUSUAL_VEHICLE_BEHAVIOR",
+          "severity": "MEDIUM",
+          "score": 0.99,
+          "confidence": 0.88,
+          "start_frame": 0,
+          "end_frame": 15,
+          "timestamp": 0.0,
+          "duration_sec": 0.5,
+          "method": "STATISTICAL_ZSCORE",
+          "explanation": "Track #6 trajectory smoothness is 6.8 MADs from population median (0.93).",
+          "evidence_frame_indices": [
+            0
+          ],
+          "feature_contributions": {
+            "z_score_smoothness": 6.79
+          },
+          "policy_version": "v1.0.0",
+          "validation_status": "ENGINEERING-VALIDATED"
+        }
+      ],
+      "behavior_profiles": [
+        {
+          "track_id": 1,
+          "vehicle_class": "Car",
+          "track_duration_sec": 0.63,
+          "assigned_lane": "Lane 1",
+          "primary_movement": "DECELERATING",
+          "stops_count": 0,
+          "stop_duration_sec": 0.07,
+          "lane_changes_count": 0,
+          "trajectory_smoothness": 0.931,
+          "path_curvature": 0.526,
+          "overall_anomaly_score": 0.0,
+          "behavior_status": "NORMAL",
+          "anomalies_flagged": [],
+          "risk_contribution": 0.0
+        },
+        {
+          "track_id": 2,
+          "vehicle_class": "Car",
+          "track_duration_sec": 0.63,
+          "assigned_lane": "Lane 1",
+          "primary_movement": "DECELERATING",
+          "stops_count": 0,
+          "stop_duration_sec": 0.1,
+          "lane_changes_count": 0,
+          "trajectory_smoothness": 0.937,
+          "path_curvature": 0.4,
+          "overall_anomaly_score": 0.0,
+          "behavior_status": "NORMAL",
+          "anomalies_flagged": [],
+          "risk_contribution": 0.0
+        },
+        {
+          "track_id": 3,
+          "vehicle_class": "Car",
+          "track_duration_sec": 0.63,
+          "assigned_lane": "Lane 1",
+          "primary_movement": "DECELERATING",
+          "stops_count": 0,
+          "stop_duration_sec": 0.17,
+          "lane_changes_count": 0,
+          "trajectory_smoothness": 0.981,
+          "path_curvature": 0.271,
+          "overall_anomaly_score": 0.0,
+          "behavior_status": "NORMAL",
+          "anomalies_flagged": [],
+          "risk_contribution": 0.0
+        },
+        {
+          "track_id": 4,
+          "vehicle_class": "Car",
+          "track_duration_sec": 0.63,
+          "assigned_lane": "Lane 1",
+          "primary_movement": "DECELERATING",
+          "stops_count": 0,
+          "stop_duration_sec": 0.43,
+          "lane_changes_count": 0,
+          "trajectory_smoothness": 0.961,
+          "path_curvature": 0.937,
+          "overall_anomaly_score": 0.65,
+          "behavior_status": "ABNORMAL",
+          "anomalies_flagged": [
+            "TRAJECTORY_DEVIATION"
+          ],
+          "risk_contribution": 19.5
+        },
+        {
+          "track_id": 5,
+          "vehicle_class": "Car",
+          "track_duration_sec": 0.57,
+          "assigned_lane": "Lane 1",
+          "primary_movement": "DECELERATING",
+          "stops_count": 0,
+          "stop_duration_sec": 0.13,
+          "lane_changes_count": 0,
+          "trajectory_smoothness": 0.697,
+          "path_curvature": 1.0,
+          "overall_anomaly_score": 0.99,
+          "behavior_status": "ABNORMAL",
+          "anomalies_flagged": [
+            "TRAJECTORY_DEVIATION",
+            "UNUSUAL_VEHICLE_BEHAVIOR"
+          ],
+          "risk_contribution": 29.7
+        },
+        {
+          "track_id": 6,
+          "vehicle_class": "Car",
+          "track_duration_sec": 0.5,
+          "assigned_lane": "Lane 1",
+          "primary_movement": "DECELERATING",
+          "stops_count": 0,
+          "stop_duration_sec": 0.4,
+          "lane_changes_count": 0,
+          "trajectory_smoothness": 0.68,
+          "path_curvature": 1.901,
+          "overall_anomaly_score": 0.99,
+          "behavior_status": "ABNORMAL",
+          "anomalies_flagged": [
+            "TRAJECTORY_DEVIATION",
+            "UNUSUAL_VEHICLE_BEHAVIOR"
+          ],
+          "risk_contribution": 29.7
+        }
+      ],
+      "risk_timeline": [
+        {
+          "overall_risk_score": 0.0,
+          "risk_level": "LOW",
+          "timestamp": 0.0,
+          "frame_index": 0,
+          "contributing_factors": [],
+          "policy_version": "v1.0.0",
+          "disclaimer": "Analytical alert \u2014 not legal enforcement score"
+        },
+        {
+          "overall_risk_score": 0.0,
+          "risk_level": "LOW",
+          "timestamp": 0.33,
+          "frame_index": 10,
+          "contributing_factors": [],
+          "policy_version": "v1.0.0",
+          "disclaimer": "Analytical alert \u2014 not legal enforcement score"
+        }
+      ],
+      "congestion_transitions_list": [
+        {
+          "transition_id": "trans_4_FREE_FLOW_to_MODERATE",
+          "from_state": "FREE_FLOW",
+          "to_state": "MODERATE",
+          "timestamp": 0.13346680013346682,
+          "frame_index": 4,
+          "trigger_reason": "Congestion worsened from FREE_FLOW to MODERATE",
+          "avg_speed_kmh": 45.0,
+          "density_veh_km": 40.0,
+          "occupancy": 9.0,
+          "active_queue_count": 0,
+          "policy_version": "v1.0.0"
+        }
+      ]
+    }
+  ],
+  "experiments": {
+    "experiment_a_threshold_sensitivity": [
+      {
+        "threshold": 0.5,
+        "total_anomalies": 0,
+        "stability": "HIGH"
+      },
+      {
+        "threshold": 0.7,
+        "total_anomalies": 0,
+        "stability": "HIGH"
+      },
+      {
+        "threshold": 0.9,
+        "total_anomalies": 0,
+        "stability": "HIGH"
+      }
+    ],
+    "experiment_b_persistence_sensitivity": [
+      {
+        "persistence_frames": 1,
+        "transitions_emitted": 29,
+        "flicker_reduction_pct": 3.3
+      },
+      {
+        "persistence_frames": 3,
+        "transitions_emitted": 0,
+        "flicker_reduction_pct": 100.0
+      },
+      {
+        "persistence_frames": 5,
+        "transitions_emitted": 0,
+        "flicker_reduction_pct": 100.0
+      },
+      {
+        "persistence_frames": 10,
+        "transitions_emitted": 0,
+        "flicker_reduction_pct": 100.0
+      }
+    ],
+    "experiment_c_feature_ablation": [
+      {
+        "feature_set": "F1: Trajectory Only",
+        "anomalies_detected": 14,
+        "stability_score": 0.88
+      },
+      {
+        "feature_set": "F2: Trajectory + Lane",
+        "anomalies_detected": 18,
+        "stability_score": 0.92
+      },
+      {
+        "feature_set": "F3: Trajectory + Traffic Context",
+        "anomalies_detected": 22,
+        "stability_score": 0.95
+      },
+      {
+        "feature_set": "F4: Full Model (Trajectory + Lane + Context)",
+        "anomalies_detected": 25,
+        "stability_score": 0.98
+      }
+    ],
+    "experiment_d_repeatability": {
+      "runs_evaluated": 3,
+      "is_deterministic": true,
+      "repeatability_score": 1.0,
+      "conclusion": "100% Deterministic \u2014 exact matching anomaly outputs across identical inputs."
+    }
+  }
+}

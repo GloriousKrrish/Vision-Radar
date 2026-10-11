@@ -1,0 +1,323 @@
+{
+  "dataset_registry_version": "1.0.0",
+  "generated_at": "2026-09-26T10:21:17Z",
+  "datasets": [
+    {
+      "dataset_name": "BrnoCompSpeed-master",
+      "path": "DATASETS/BrnoCompSpeed-master",
+      "size_bytes": 53889,
+      "images": 0,
+      "videos": 0,
+      "annotations": 0,
+      "annotation_format": "Python evaluation scripts / benchmark code only",
+      "classes": [],
+      "splits": {},
+      "status": "complete_source_code_only",
+      "visionradar_tasks": {
+        "detection": false,
+        "tracking": false,
+        "counting": false,
+        "speed": true,
+        "calibration": true,
+        "anomaly": false,
+        "indian_traffic": false,
+        "fine_tuning": false
+      }
+    },
+    {
+      "dataset_name": "DETRAC-Test-Tra",
+      "path": "DATASETS/DETRAC-Test-Tra",
+      "size_bytes": 327399737,
+      "images": 0,
+      "videos": 0,
+      "annotations": 119,
+      "annotation_format": "MOT format TXT / MATLAB trajectory evaluation scripts",
+      "classes": [
+        "car",
+        "bus",
+        "van",
+        "others"
+      ],
+      "splits": {
+        "test": 119
+      },
+      "status": "complete_annotations_only",
+      "visionradar_tasks": {
+        "detection": false,
+        "tracking": true,
+        "counting": true,
+        "speed": false,
+        "calibration": false,
+        "anomaly": false,
+        "indian_traffic": false,
+        "fine_tuning": false
+      }
+    },
+    {
+      "dataset_name": "DETRAC-Train-Detections-20260926T041411Z-1-001",
+      "path": "DATASETS/DETRAC-Train-Detections-20260926T041411Z-1-001",
+      "size_bytes": 170601363,
+      "images": 0,
+      "videos": 0,
+      "annotations": 242,
+      "annotation_format": "Baseline detector TXT output (<frame_idx>,<target_id>,<left>,<top>,<width>,<height>,<conf>)",
+      "classes": [
+        "car",
+        "bus",
+        "van",
+        "others"
+      ],
+      "splits": {
+        "train": 242
+      },
+      "status": "complete_detections_only",
+      "visionradar_tasks": {
+        "detection": true,
+        "tracking": true,
+        "counting": true,
+        "speed": false,
+        "calibration": false,
+        "anomaly": false,
+        "indian_traffic": false,
+        "fine_tuning": false
+      }
+    },
+    {
+      "dataset_name": "ITD-Indian-traffic-dataset-main",
+      "path": "DATASETS/ITD-Indian-traffic-dataset-main",
+      "size_bytes": 14417458,
+      "images": 10,
+      "videos": 0,
+      "annotations": 0,
+      "annotation_format": "Unannotated images (Sample repository from IEEE ITD paper)",
+      "classes": [],
+      "splits": {},
+      "status": "unannotated_samples",
+      "visionradar_tasks": {
+        "detection": false,
+        "tracking": false,
+        "counting": false,
+        "speed": false,
+        "calibration": false,
+        "anomaly": false,
+        "indian_traffic": true,
+        "fine_tuning": false
+      }
+    },
+    {
+      "dataset_name": "training",
+      "path": "DATASETS/training",
+      "size_bytes": 8198829,
+      "images": 117,
+      "videos": 0,
+      "annotations": 117,
+      "annotation_format": "YOLO TXT (normalized cx, cy, w, h)",
+      "classes": [
+        "bus",
+        "car",
+        "motorcycle",
+        "truck"
+      ],
+      "splits": {
+        "train": 117
+      },
+      "status": "complete",
+      "visionradar_tasks": {
+        "detection": true,
+        "tracking": false,
+        "counting": true,
+        "speed": false,
+        "calibration": false,
+        "anomaly": false,
+        "indian_traffic": false,
+        "fine_tuning": true
+      }
+    },
+    {
+      "dataset_name": "valid-fine-tuning",
+      "path": "DATASETS/valid-fine-tuning",
+      "size_bytes": 935108,
+      "images": 11,
+      "videos": 0,
+      "annotations": 11,
+      "annotation_format": "YOLO TXT (normalized cx, cy, w, h)",
+      "classes": [
+        "bus",
+        "car",
+        "motorcycle",
+        "truck"
+      ],
+      "splits": {
+        "val": 11
+      },
+      "status": "complete",
+      "visionradar_tasks": {
+        "detection": true,
+        "tracking": false,
+        "counting": true,
+        "speed": false,
+        "calibration": false,
+        "anomaly": false,
+        "indian_traffic": false,
+        "fine_tuning": true
+      }
+    },
+    {
+      "dataset_name": "valid-self-learning",
+      "path": "DATASETS/valid-self-learning",
+      "size_bytes": 497801,
+      "images": 6,
+      "videos": 0,
+      "annotations": 6,
+      "annotation_format": "YOLO TXT (normalized cx, cy, w, h)",
+      "classes": [
+        "bus",
+        "car",
+        "motorcycle",
+        "truck"
+      ],
+      "splits": {
+        "val_self_learning": 6
+      },
+      "status": "complete",
+      "visionradar_tasks": {
+        "detection": true,
+        "tracking": false,
+        "counting": true,
+        "speed": false,
+        "calibration": false,
+        "anomaly": false,
+        "indian_traffic": false,
+        "fine_tuning": true
+      }
+    },
+    {
+      "dataset_name": "vehicle-detection-project-main",
+      "path": "DATASETS/vehicle-detection-project-main",
+      "size_bytes": 80405066,
+      "images": 880,
+      "videos": 0,
+      "annotations": 877,
+      "annotation_format": "YOLO TXT + data.yaml + CSV overall metrics",
+      "classes": [
+        "bus",
+        "car",
+        "motorcycle",
+        "truck"
+      ],
+      "splits": {
+        "train": 800,
+        "val": 50,
+        "test": 30
+      },
+      "status": "complete",
+      "visionradar_tasks": {
+        "detection": true,
+        "tracking": false,
+        "counting": true,
+        "speed": false,
+        "calibration": false,
+        "anomaly": false,
+        "indian_traffic": false,
+        "fine_tuning": true
+      }
+    },
+    {
+      "dataset_name": "Vehicle_Tracking",
+      "path": "DATASETS/Vehicle_Tracking",
+      "size_bytes": 41240111,
+      "images": 0,
+      "videos": 4,
+      "annotations": 4,
+      "annotation_format": "JSON ground-truth trajectory + MOT format TXT",
+      "classes": [
+        "car",
+        "bus",
+        "truck",
+        "motorcycle"
+      ],
+      "splits": {
+        "custom": 4
+      },
+      "status": "complete",
+      "visionradar_tasks": {
+        "detection": true,
+        "tracking": true,
+        "counting": true,
+        "speed": true,
+        "calibration": true,
+        "anomaly": false,
+        "indian_traffic": true,
+        "fine_tuning": true
+      }
+    },
+    {
+      "dataset_name": "Unconfirmed 238577.crdownload",
+      "path": "DATASETS/Unconfirmed 238577.crdownload",
+      "size_bytes": 47433075,
+      "images": 0,
+      "videos": 0,
+      "annotations": 0,
+      "annotation_format": "Incomplete Chrome download file (.crdownload)",
+      "classes": [],
+      "splits": {},
+      "status": "incomplete",
+      "visionradar_tasks": {
+        "detection": false,
+        "tracking": false,
+        "counting": false,
+        "speed": false,
+        "calibration": false,
+        "anomaly": false,
+        "indian_traffic": false,
+        "fine_tuning": false
+      }
+    },
+    {
+      "dataset_name": "Unconfirmed 241433.crdownload",
+      "path": "DATASETS/Unconfirmed 241433.crdownload",
+      "size_bytes": 23729712,
+      "images": 0,
+      "videos": 0,
+      "annotations": 0,
+      "annotation_format": "Incomplete Chrome download file (.crdownload)",
+      "classes": [],
+      "splits": {},
+      "status": "incomplete",
+      "visionradar_tasks": {
+        "detection": false,
+        "tracking": false,
+        "counting": false,
+        "speed": false,
+        "calibration": false,
+        "anomaly": false,
+        "indian_traffic": false,
+        "fine_tuning": false
+      }
+    },
+    {
+      "dataset_name": "Unconfirmed 421580.crdownload",
+      "path": "DATASETS/Unconfirmed 421580.crdownload",
+      "size_bytes": 27112262,
+      "images": 0,
+      "videos": 0,
+      "annotations": 0,
+      "annotation_format": "Incomplete Chrome download file (.crdownload)",
+      "classes": [],
+      "splits": {},
+      "status": "incomplete",
+      "visionradar_tasks": {
+        "detection": false,
+        "tracking": false,
+        "counting": false,
+        "speed": false,
+        "calibration": false,
+        "anomaly": false,
+        "indian_traffic": false,
+        "fine_tuning": false
+      }
+    }
+  ],
+  "phase_5_1_evaluated_at": "2026-09-26T05:33:49Z",
+  "baseline_model_hash": "c789161ed43c"
+}

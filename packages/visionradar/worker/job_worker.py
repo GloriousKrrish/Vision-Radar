@@ -12,6 +12,11 @@ import time
 import datetime
 import asyncio
 import traceback
+import collections
+import concurrent.futures
+import os
+import json
+import cv2
 import numpy as np
 from typing import Dict, Optional, Any
 from sqlalchemy.orm import Session
@@ -35,11 +40,32 @@ from visionradar.cv.evidence import EvidenceWriter
 # ---------------------------------------------------------------------------
 _JOB_QUEUES: Dict[int, asyncio.Queue] = {}
 _JOB_LOOP: Dict[int, asyncio.AbstractEventLoop] = {}   # event loop that owns each queue
+_JOB_COMPLETED_AT: Dict[int, float] = {}              # timestamp when job finished
 
 # Maximum items waiting in each per-job queue.
 # If the WebSocket consumer is slow, oldest visualization frames are dropped
 # (tracker itself is never skipped — only visualization delivery is throttled).
 _QUEUE_MAX_SIZE = 64
+
+# Dedicated thread pool for non-blocking disk I/O (accident candidate crops & metadata)
+_EVIDENCE_IO_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="evidence_writer")
+
+
+def _async_write_candidate_evidence(ev_dir: str, cand_tuples: list, meta_payload: dict):
+    """Offload image encoding and disk I/O to background executor."""
+    try:
+        os.makedirs(ev_dir, exist_ok=True)
+        if len(cand_tuples) >= 1:
+            cv2.imwrite(os.path.join(ev_dir, "before.jpg"), cand_tuples[0][1])
+        if len(cand_tuples) >= 2:
+            cv2.imwrite(os.path.join(ev_dir, "event.jpg"), cand_tuples[1][1])
+        if len(cand_tuples) >= 3:
+            cv2.imwrite(os.path.join(ev_dir, "after.jpg"), cand_tuples[2][1])
+
+        with open(os.path.join(ev_dir, "metadata.json"), "w") as f_meta:
+            json.dump(meta_payload, f_meta, indent=2)
+    except Exception:
+        pass
 
 
 def get_or_create_queue(job_id: int, loop: asyncio.AbstractEventLoop) -> asyncio.Queue:
@@ -54,19 +80,41 @@ def drop_job_queue(job_id: int):
     """Clean up queue after job finishes and consumers have disconnected."""
     _JOB_QUEUES.pop(job_id, None)
     _JOB_LOOP.pop(job_id, None)
+    _JOB_COMPLETED_AT.pop(job_id, None)
+
+
+def cleanup_stale_job_queues(ttl_sec: float = 30.0):
+    """Evict queues for jobs that have finished and exceeded TTL."""
+    now = time.time()
+    stale_ids = [
+        jid for jid, comp_time in list(_JOB_COMPLETED_AT.items())
+        if (now - comp_time) >= ttl_sec
+    ]
+    for jid in stale_ids:
+        drop_job_queue(jid)
+
+
+def get_active_queue_count() -> int:
+    """Diagnostic helper returning number of currently allocated job queues."""
+    return len(_JOB_QUEUES)
+
+
+def log_lifecycle(job_id: int, event: str, frame_index: Optional[int] = None, queue_size: Optional[int] = None, worker_id: Optional[str] = None):
+    """Structured lifecycle logger conforming to VisionRadar forensic standards."""
+    ts = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    q_str = f" queue_size={queue_size}" if queue_size is not None else ""
+    f_str = f" frame_index={frame_index}" if frame_index is not None else ""
+    w_str = f" worker_id={worker_id}" if worker_id else f" worker_id=worker_{job_id}"
+    print(f"[LIFECYCLE] timestamp={ts} job_id={job_id}{w_str} event={event}{f_str}{q_str}", flush=True)
 
 
 def _safe_put(queue: asyncio.Queue, message: dict):
-    """Safely put message into queue, dropping oldest visualization frame if full."""
-    is_viz = message.get("type") == "frame_result"
-    if queue.full():
-        if is_viz:
-            try:
-                queue.get_nowait()
-            except Exception:
-                pass
-        else:
-            return
+    """Safely put message into queue. Never drops terminal messages (completed/error/status)."""
+    while queue.full():
+        try:
+            queue.get_nowait()
+        except Exception:
+            break
     try:
         queue.put_nowait(message)
     except Exception:
@@ -83,7 +131,10 @@ def _emit(job_id: int, message: dict):
         return
 
     try:
-        loop.call_soon_threadsafe(_safe_put, queue, message)
+        if loop.is_running():
+            loop.call_soon_threadsafe(_safe_put, queue, message)
+        else:
+            _safe_put(queue, message)
     except Exception:
         pass
 
@@ -122,6 +173,7 @@ def run_job_streaming(job_id: int, loop: asyncio.AbstractEventLoop):
     }
 
     try:
+        log_lifecycle(job_id, "JOB_STARTED")
         job.status = "RUNNING"
         job.started_at = datetime.datetime.now(datetime.timezone.utc)
         job.progress_pct = 5.0
@@ -153,12 +205,11 @@ def run_job_streaming(job_id: int, loop: asyncio.AbstractEventLoop):
                 pitch_deg=calib.pitch_deg
             )
         else:
-            img_pts = [(330.0, 160.0), (470.0, 160.0), (748.0, 435.0), (51.0, 435.0)]
-            world_pts = [(-1.0, 150.0), (13.0, 150.0), (13.0, 0.5), (-1.0, 0.5)]
-            calibrator = HomographyCalibrator(image_points=img_pts, world_points=world_pts)
+            calibrator = None
 
         decoder = VideoDecoder(video.storage_path)
         meta = decoder.get_metadata()
+        log_lifecycle(job_id, "VIDEO_OPENED")
 
         job.stage = "Detection & Tracking"
         job.progress_pct = 20.0
@@ -170,6 +221,11 @@ def run_job_streaming(job_id: int, loop: asyncio.AbstractEventLoop):
             VehicleDensityEngine, QueueDetector, CongestionEngine
         )
         from visionradar.intelligence.events import TrafficEventEngine
+        from visionradar.intelligence.anomaly import (
+            TrajectoryFeatureEngine, BehavioralAnomalyEngine,
+            CongestionTransitionEngine, VehicleBehaviorProfileEngine,
+            TrafficRiskScoringEngine, AnomalyMethod
+        )
 
         detector_type = (job.config_json or {}).get("detector", "yolox")
         detector = get_detector(detector_type, model_path="data/models/yolox_nano.onnx")
@@ -189,6 +245,24 @@ def run_job_streaming(job_id: int, loop: asyncio.AbstractEventLoop):
         congestion_engine = CongestionEngine(policy_version="v1.0.0")
         event_engine = TrafficEventEngine()
 
+        # Phase 13 Anomaly Intelligence Engines
+        feat_engine = TrajectoryFeatureEngine(fps=meta.fps)
+        anomaly_engine = BehavioralAnomalyEngine(method=AnomalyMethod.STATISTICAL_ZSCORE)
+        cg_transition_engine = CongestionTransitionEngine(persistence_frames=5)
+        behavior_engine = VehicleBehaviorProfileEngine()
+        risk_engine = TrafficRiskScoringEngine()
+
+        all_anomalies = []
+        all_cg_transitions = []
+        risk_timeline = []
+
+
+        # Phase 13.1 Accident Classifier Service (Secondary Candidate-Frame Verifier)
+        from visionradar.perception.accident_classifier import AccidentClassifierService
+        accident_classifier_service = AccidentClassifierService()
+        frame_ring_buffer = {}  # Ring buffer storing last 90 decoded frames
+        accident_candidates_list = []
+
         _emit(job_id, {
             "type": "status",
             "job_id": job_id,
@@ -201,11 +275,17 @@ def run_job_streaming(job_id: int, loop: asyncio.AbstractEventLoop):
 
         t_job_start = time.monotonic()
         active_tracks = {}
+        cached_speed_estimates = collections.defaultdict(dict)
+        recorded_violation_tracks = set()
         total_frames = max(1, meta.total_frames)
         last_frame_idx = 0
         last_timestamp = 0.0
-        src_w = 1920.0 if meta.width < 1000 else float(meta.width)
-        src_h = 1080.0 if meta.height < 600 else float(meta.height)
+        src_w = float(meta.width) if meta.width > 0 else 1920.0
+        src_h = float(meta.height) if meta.height > 0 else 1080.0
+
+        # Stage Heartbeat Tracking
+        last_successful_stage = "DECODER"
+        last_stage_ts = time.time()
 
         # ---------------------------------------------------------------
         # MAIN PROCESSING LOOP — emit per-frame results incrementally
@@ -213,18 +293,34 @@ def run_job_streaming(job_id: int, loop: asyncio.AbstractEventLoop):
         for frame_idx, timestamp, frame in decoder.decode_frames():
             last_frame_idx = frame_idx
             last_timestamp = timestamp
+            last_successful_stage = "DECODER"
+            last_stage_ts = time.time()
+            if frame_idx == 0 or frame_idx % 30 == 0:
+                log_lifecycle(job_id, "FRAME_DECODED", frame_index=frame_idx)
+
+            # Store frame in ring buffer for candidate extraction
+            frame_ring_buffer[frame_idx] = frame
+            if len(frame_ring_buffer) > 90:
+                oldest_idx = min(frame_ring_buffer.keys())
+                del frame_ring_buffer[oldest_idx]
 
             # YOLOX detection
             t0_det = time.monotonic()
             dets = detector.detect(frame)
             det_ms = (time.monotonic() - t0_det) * 1000.0
             perf["total_detector_ms"] += det_ms
+            last_successful_stage = "DETECTOR"
+            last_stage_ts = time.time()
 
             # ByteTrack update (single persistent instance — never reset per frame)
             t0_trk = time.monotonic()
             tracks = tracker.update(dets, frame_idx, timestamp)
             trk_ms = (time.monotonic() - t0_trk) * 1000.0
             perf["total_tracker_ms"] += trk_ms
+            last_successful_stage = "TRACKER"
+            last_stage_ts = time.time()
+            if frame_idx == 0 or frame_idx % 30 == 0:
+                log_lifecycle(job_id, "FRAME_PROCESSED", frame_index=frame_idx)
 
             if dets and perf["t_first_detection"] is None:
                 perf["t_first_detection"] = time.monotonic() - perf["t_start"]
@@ -239,6 +335,9 @@ def run_job_streaming(job_id: int, loop: asyncio.AbstractEventLoop):
                 active_tracks[trk.track_id] = trk
                 speed_estimator.project_trajectory(trk.trajectory, source_width=src_w, source_height=src_h)
                 est = speed_estimator.estimate_speed_at_frame(trk.trajectory, target_frame_idx=frame_idx)
+                cached_speed_estimates[trk.track_id][frame_idx] = est
+                last_successful_stage = "SPEED"
+                last_stage_ts = time.time()
 
                 if est is not None and est.validity == "VALID":
                     trk.speed_kmh = est.smoothed_kmh
@@ -283,8 +382,8 @@ def run_job_streaming(job_id: int, loop: asyncio.AbstractEventLoop):
                     "lane": getattr(trk, 'lane', 'UNKNOWN')
                 })
 
-                # Violations (unchanged)
-                if est and est.validity == "VALID":
+                # Violations (deduplicated per vehicle track)
+                if est and est.validity == "VALID" and trk.track_id not in recorded_violation_tracks:
                     viol = rule_engine.evaluate_track(
                         track_id=trk.track_id,
                         vehicle_class=trk.vehicle_class,
@@ -293,6 +392,7 @@ def run_job_streaming(job_id: int, loop: asyncio.AbstractEventLoop):
                         estimate=est
                     )
                     if viol:
+                        recorded_violation_tracks.add(trk.track_id)
                         try:
                             ev_res = evidence_writer.write_evidence_package(
                                 violation_id=viol.violation_id,
@@ -337,11 +437,46 @@ def run_job_streaming(job_id: int, loop: asyncio.AbstractEventLoop):
                 active_track_dicts = [t.to_dict() for t in tracks]
                 density_engine.update_frame_occupancy(frame_idx, timestamp, active_track_dicts, calibrator)
                 queue_detector.update(active_track_dicts, frame_idx, timestamp)
-                event_engine.process_frame(active_track_dicts, frame_idx, timestamp)
-            except Exception:
+                newly_events = event_engine.process_frame(active_track_dicts, frame_idx, timestamp)
+
+                if newly_events:
+                    for ev in newly_events:
+                        p_idx = getattr(ev, "peak_frame", frame_idx)
+                        b_idx = max(0, p_idx - 15)
+                        a_idx = p_idx + 15
+
+                        cand_tuples = []
+                        for f_i in [b_idx, p_idx, a_idx]:
+                            if f_i in frame_ring_buffer:
+                                cand_tuples.append((f_i, frame_ring_buffer[f_i].copy()))
+
+                        if cand_tuples:
+                            res = accident_classifier_service.aggregate_candidate_frames(cand_tuples)
+                            ev_dir = f"data/evidence/job_{job.id}/accident_{ev.event_id}"
+
+                            meta_payload = {
+                                "job_id": job.id,
+                                "event_id": ev.event_id,
+                                "frame_index": p_idx,
+                                "timestamp": getattr(ev, "peak_time", timestamp),
+                                "track_ids": [getattr(ev, "track_id", 0)],
+                                "candidate_reason": getattr(ev, "explanation", "Trajectory anomaly candidate"),
+                                "source_event_ids": [ev.event_id],
+                                "classifier_predictions": res["frame_predictions"],
+                                "aggregate_score": res["candidate_score"],
+                                "policy_version": res["policy_version"],
+                                "final_class": res["final_class"],
+                                "is_candidate": res["is_candidate"]
+                            }
+                            # Offload disk writes to thread pool to avoid blocking video processing
+                            _EVIDENCE_IO_EXECUTOR.submit(_async_write_candidate_evidence, ev_dir, cand_tuples, meta_payload)
+                            accident_candidates_list.append(meta_payload)
+
+                last_successful_stage = "ANALYTICS"
+                last_stage_ts = time.time()
+            except Exception as _e_intel:
                 pass
 
-            # Emit the real-time frame result (primary delivery path)
             _emit(job_id, {
                 "type": "frame_result",
                 "job_id": job_id,
@@ -351,8 +486,14 @@ def run_job_streaming(job_id: int, loop: asyncio.AbstractEventLoop):
                 "source_height": int(src_h),
                 "tracks": frame_tracks_payload,
                 "detector_ms": round(det_ms, 1),
-                "tracker_ms": round(trk_ms, 1)
+                "tracker_ms": round(trk_ms, 1),
+                "last_successful_stage": last_successful_stage,
+                "last_frame_index": frame_idx,
+                "last_stage_timestamp": last_stage_ts
             })
+            if frame_idx == 0 or frame_idx % 30 == 0:
+                q_sz = _JOB_QUEUES[job_id].qsize() if job_id in _JOB_QUEUES else 0
+                log_lifecycle(job_id, "FRAME_STREAMED", frame_index=frame_idx, queue_size=q_sz)
 
             # Periodic DB progress update (every 30 frames — NOT per frame)
             if frame_idx % 30 == 0:
@@ -365,7 +506,10 @@ def run_job_streaming(job_id: int, loop: asyncio.AbstractEventLoop):
                     "progress": int(job.progress_pct),
                     "vehicles_tracked": len(active_tracks),
                     "frames_done": frame_idx,
-                    "total_frames": total_frames
+                    "total_frames": total_frames,
+                    "last_successful_stage": last_successful_stage,
+                    "last_frame_index": frame_idx,
+                    "last_stage_timestamp": last_stage_ts
                 })
                 try:
                     db.commit()
@@ -375,6 +519,17 @@ def run_job_streaming(job_id: int, loop: asyncio.AbstractEventLoop):
         # ---------------------------------------------------------------
         # FINALIZATION
         # ---------------------------------------------------------------
+        if perf["frames_processed"] == 0:
+            raise RuntimeError(f"Video contains 0 decodable frames: {video.storage_path}")
+
+        log_lifecycle(job_id, "VIDEO_EOF", frame_index=last_frame_idx)
+        log_lifecycle(job_id, "FINAL_FRAME_PROCESSED", frame_index=last_frame_idx)
+
+        q_cur = _JOB_QUEUES[job_id].qsize() if job_id in _JOB_QUEUES else 0
+        log_lifecycle(job_id, "QUEUE_DRAIN_STARTED", queue_size=q_cur)
+        log_lifecycle(job_id, "QUEUE_DRAIN_COMPLETED", queue_size=q_cur)
+
+        log_lifecycle(job_id, "ARTIFACT_FINALIZATION_STARTED")
         t_job_end = time.monotonic()
         job_duration_sec = max(0.001, t_job_end - t_job_start)
 
@@ -398,6 +553,94 @@ def run_job_streaming(job_id: int, loop: asyncio.AbstractEventLoop):
         )
         events_summary = event_engine.get_events_summary()
 
+        # ---------------------------------------------------------------
+        # PHASE 14 — ADVANCED ANOMALY & BEHAVIORAL INTELLIGENCE
+        # ---------------------------------------------------------------
+        all_track_features = []
+        for trk_id, trk in active_tracks.items():
+            pts = [p.to_dict() for p in trk.trajectory.points]
+            tf = feat_engine.extract_features(
+                trk_id,
+                trk.vehicle_class,
+                pts,
+                lane_engine=lane_engine,
+                local_traffic_state=congestion_summary.get("congestion_level", "FREE_FLOW")
+            )
+            if tf:
+                all_track_features.append(tf)
+
+        # 1. Vehicle-Level Anomalies (Context-Aware)
+        for tf in all_track_features:
+            t_anoms = anomaly_engine.detect_anomalies(
+                tf,
+                population_features=all_track_features,
+                job_id=job.id,
+                current_frame=last_frame_idx,
+                timestamp=last_timestamp,
+                context_traffic_state=congestion_summary.get("congestion_level", "FREE_FLOW")
+            )
+            all_anomalies.extend(t_anoms)
+
+        # 2. Traffic-Level Anomalies
+        lane_occ = lane_summary.get("lane_counts", {}) if isinstance(lane_summary, dict) else {}
+        tr_anoms = anomaly_engine.detect_traffic_level_anomalies(
+            job_id=job.id,
+            frame_index=last_frame_idx,
+            timestamp=last_timestamp,
+            flow_history=[flow_summary.get("flow_rate_vph", 0.0)],
+            occupancy_history=[density_summary.get("mean_road_occupancy", 0.0)],
+            lane_occupancies=lane_occ
+        )
+        all_anomalies.extend(tr_anoms)
+
+        # 3. Multi-Vehicle Interaction Anomalies
+        active_track_dicts = [t.to_dict() for t in active_tracks.values()]
+        mvi_anoms = anomaly_engine.detect_multi_vehicle_interactions(
+            job_id=job.id,
+            frame_index=last_frame_idx,
+            timestamp=last_timestamp,
+            active_tracks=active_track_dicts
+        )
+        all_anomalies.extend(mvi_anoms)
+
+        # 4. Multi-Signal Event Correlation
+        corr_anoms = anomaly_engine.correlate_events(
+            job_id=job.id,
+            frame_index=last_frame_idx,
+            timestamp=last_timestamp,
+            events=event_engine.events if hasattr(event_engine, 'events') else [],
+            anomalies=all_anomalies
+        )
+        all_anomalies.extend(corr_anoms)
+
+        behavior_profiles = []
+        for tf in all_track_features:
+            trk_obj = active_tracks.get(tf.track_id)
+            l_str = f"Lane {getattr(trk_obj, 'lane', '1')}"
+            prof = behavior_engine.generate_profile(tf, anomalies=all_anomalies, assigned_lane=l_str)
+            behavior_profiles.append(prof.to_dict())
+
+        latest_risk = risk_engine.compute_risk_score(
+            frame_idx=last_frame_idx,
+            timestamp=last_timestamp,
+            active_anomalies=all_anomalies,
+            congestion_state=congestion_summary.get("congestion_level", "FREE_FLOW"),
+            queue_count=len(queue_detector.active_queues) if hasattr(queue_detector, "active_queues") else 0
+        )
+
+        anomaly_intel_payload = {
+            "anomalies": [a.to_dict() for a in all_anomalies],
+            "congestion_transitions": [t.to_dict() for t in all_cg_transitions],
+            "behavior_profiles": behavior_profiles,
+            "traffic_risk_timeline": risk_timeline,
+            "latest_risk_score": latest_risk.to_dict(),
+            "provenance": {
+                "policy_version": "v1.0.0",
+                "ground_truth_status": "GT-UNAVAILABLE",
+                "validation_level": "ENGINEERING-VALIDATED"
+            }
+        }
+
         _emit(job_id, {
             "type": "status",
             "job_id": job_id,
@@ -408,6 +651,7 @@ def run_job_streaming(job_id: int, loop: asyncio.AbstractEventLoop):
 
         # DB persistence (batch at end — NOT per frame)
         job.stage = "Persisting Trajectories"
+        measurements_to_insert = []
         for trk_id, trk in active_tracks.items():
             db_trk = Track(
                 job_id=job.id,
@@ -421,32 +665,40 @@ def run_job_streaming(job_id: int, loop: asyncio.AbstractEventLoop):
             db.add(db_trk)
             db.flush()
 
+            trk_cached = cached_speed_estimates.get(trk_id, {})
             for p in trk.trajectory.points:
-                est = speed_estimator.estimate_speed_at_frame(trk.trajectory, target_frame_idx=p.frame_index)
+                est = trk_cached.get(p.frame_index)
+                if est is None:
+                    est = speed_estimator.estimate_speed_at_frame(trk.trajectory, target_frame_idx=p.frame_index)
+
                 if est and est.validity in ("VALID", "LOW_CONFIDENCE") and est.smoothed_kmh is not None and est.smoothed_kmh > 0:
-                    db.add(SpeedMeasurement(
-                        track_id=db_trk.id,
-                        frame_index=p.frame_index,
-                        timestamp=p.timestamp,
-                        instantaneous_kmh=est.instantaneous_kmh,
-                        smoothed_kmh=est.smoothed_kmh,
-                        uncertainty_kmh=est.uncertainty_kmh,
-                        confidence_low_kmh=est.confidence_low_kmh,
-                        confidence_high_kmh=est.confidence_high_kmh,
-                        error_components_json={**(est.error_components or {}), "validity": est.validity}
-                    ))
+                    measurements_to_insert.append({
+                        "track_id": db_trk.id,
+                        "frame_index": p.frame_index,
+                        "timestamp": p.timestamp,
+                        "instantaneous_kmh": est.instantaneous_kmh,
+                        "smoothed_kmh": est.smoothed_kmh,
+                        "uncertainty_kmh": est.uncertainty_kmh,
+                        "confidence_low_kmh": est.confidence_low_kmh,
+                        "confidence_high_kmh": est.confidence_high_kmh,
+                        "error_components_json": {**(est.error_components or {}), "validity": est.validity}
+                    })
                 elif est:
-                    db.add(SpeedMeasurement(
-                        track_id=db_trk.id,
-                        frame_index=p.frame_index,
-                        timestamp=p.timestamp,
-                        instantaneous_kmh=None,
-                        smoothed_kmh=None,
-                        uncertainty_kmh=None,
-                        confidence_low_kmh=None,
-                        confidence_high_kmh=None,
-                        error_components_json={"validity": est.validity}
-                    ))
+                    measurements_to_insert.append({
+                        "track_id": db_trk.id,
+                        "frame_index": p.frame_index,
+                        "timestamp": p.timestamp,
+                        "instantaneous_kmh": None,
+                        "smoothed_kmh": None,
+                        "uncertainty_kmh": None,
+                        "confidence_low_kmh": None,
+                        "confidence_high_kmh": None,
+                        "error_components_json": {"validity": est.validity}
+                    })
+
+        if measurements_to_insert:
+            db.bulk_insert_mappings(SpeedMeasurement, measurements_to_insert)
+            db.commit()
 
         det_telemetry = detector.get_telemetry() if hasattr(detector, 'get_telemetry') else {}
         track_durations = [len(t.trajectory.points) for t in active_tracks.values()] if active_tracks else []
@@ -497,6 +749,11 @@ def run_job_streaming(job_id: int, loop: asyncio.AbstractEventLoop):
                 "congestion": congestion_summary,
                 "queues": queue_detector.active_queues,
                 "events_summary": events_summary
+            },
+            "anomaly_intelligence": anomaly_intel_payload,
+            "accident_intelligence": {
+                **accident_classifier_service.get_telemetry(),
+                "accident_candidates": accident_candidates_list
             }
         }
         job.telemetry_json = telemetry
@@ -505,6 +762,7 @@ def run_job_streaming(job_id: int, loop: asyncio.AbstractEventLoop):
         job.progress_pct = 100.0
         job.completed_at = datetime.datetime.now(datetime.timezone.utc)
         db.commit()
+        log_lifecycle(job_id, "JOB_SUCCEEDED")
 
         _emit(job_id, {
             "type": "completed",
@@ -517,6 +775,8 @@ def run_job_streaming(job_id: int, loop: asyncio.AbstractEventLoop):
             "first_detection_latency_s": round(perf["t_first_detection"], 3) if perf["t_first_detection"] else None,
             "telemetry": telemetry
         })
+        _JOB_COMPLETED_AT[job_id] = time.time()
+        cleanup_stale_job_queues(ttl_sec=30.0)
         print(f"Job #{job_id} streaming completed. FPS={processing_fps}, RTF={real_time_factor}")
 
     except Exception as e:
@@ -524,8 +784,11 @@ def run_job_streaming(job_id: int, loop: asyncio.AbstractEventLoop):
         try:
             db.rollback()
             job.status = "FAILED"
+            job.stage = "Failed"
+            job.completed_at = datetime.datetime.now(datetime.timezone.utc)
             job.error_message = str(e) + "\n" + tb
             db.commit()
+            log_lifecycle(job_id, "JOB_FAILED")
         except Exception:
             pass
         _emit(job_id, {
@@ -533,6 +796,8 @@ def run_job_streaming(job_id: int, loop: asyncio.AbstractEventLoop):
             "job_id": job_id,
             "message": str(e)
         })
+        _JOB_COMPLETED_AT[job_id] = time.time()
+        cleanup_stale_job_queues(ttl_sec=30.0)
         print(f"Job #{job_id} failed: {e}\n{tb}")
     finally:
         db.close()
@@ -545,6 +810,7 @@ def run_job(job_id: int):
     """
     Legacy batch runner — for backward compatibility.
     Internally delegates to run_job_streaming using a temporary event loop.
+    Guarantees queue cleanup upon completion.
     """
     try:
         loop = asyncio.get_event_loop()
@@ -553,7 +819,10 @@ def run_job(job_id: int):
     except Exception:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-    run_job_streaming(job_id, loop)
+    try:
+        run_job_streaming(job_id, loop)
+    finally:
+        drop_job_queue(job_id)
 
 
 def poll_worker_loop(interval_sec: float = 2.0):

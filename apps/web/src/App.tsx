@@ -4,9 +4,10 @@ import { CalibrationView } from './components/CalibrationView';
 import { ExperimentsView } from './components/ExperimentsView';
 import { ArchitectureView } from './components/ArchitectureView';
 import { BenchmarkView } from './components/BenchmarkView';
+import { ResearchWorkbenchView } from './components/ResearchWorkbenchView';
 
 export const App: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<'wb' | 'cal' | 'exp' | 'arch' | 'bm'>('wb');
+  const [activeTab, setActiveTab] = useState<'wb' | 'cal' | 'exp' | 'arch' | 'bm' | 'rwb'>('wb');
   const [healthStatus, setHealthStatus] = useState<string>('Online');
 
   useEffect(() => {
@@ -14,7 +15,8 @@ export const App: React.FC = () => {
       .then(res => res.json())
       .then(data => {
         if (data.status === 'online') {
-          setHealthStatus(`Online (${data.cv_engine})`);
+          const verifiedStr = data.pipeline_verified ? ` · Verified (${data.succeeded_jobs} jobs)` : '';
+          setHealthStatus(`Online (${data.cv_engine}${verifiedStr})`);
         }
       })
       .catch(() => setHealthStatus('Local'));
@@ -30,6 +32,12 @@ export const App: React.FC = () => {
             onClick={() => setActiveTab('wb')}
           >
             Workbench
+          </button>
+          <button
+            className={activeTab === 'rwb' ? 'on' : ''}
+            onClick={() => setActiveTab('rwb')}
+          >
+            🔬 Research Workbench
           </button>
           <button
             className={activeTab === 'cal' ? 'on' : ''}
@@ -66,6 +74,10 @@ export const App: React.FC = () => {
           <WorkbenchView />
         </section>
 
+        <section className={`tab ${activeTab === 'rwb' ? 'on' : ''}`} id="rwb">
+          <ResearchWorkbenchView />
+        </section>
+
         <section className={`tab ${activeTab === 'cal' ? 'on' : ''}`} id="cal">
           <CalibrationView />
         </section>
@@ -85,3 +97,4 @@ export const App: React.FC = () => {
     </div>
   );
 };
+

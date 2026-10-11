@@ -1,0 +1,289 @@
+{
+  "phase": "5.1",
+  "title": "Pretrained YOLOX-Nano Baseline Model Evaluation",
+  "timestamp": "2026-09-26T05:33:49Z",
+  "hardware": {
+    "platform": "Windows-11-10.0.26220-SP0",
+    "python_version": "3.14.4",
+    "execution_provider": "CPUExecutionProvider"
+  },
+  "model": {
+    "name": "YOLOX-Nano-ONNX (Pretrained Base)",
+    "path": "data/models/yolox_nano.onnx",
+    "hash": "c789161ed43c",
+    "input_resolution": "640x640",
+    "confidence_threshold": 0.25,
+    "nms_threshold": 0.45
+  },
+  "results": {
+    "vehicle-detection-project-main_test": {
+      "dataset": "vehicle-detection-project-main",
+      "split": "test",
+      "images_evaluated": 80,
+      "gt_boxes": 96,
+      "pred_detections": 113,
+      "confidence_threshold": 0.25,
+      "nms_threshold": 0.45,
+      "model_name": "YOLOX-Nano-ONNX (Pretrained Base)",
+      "model_hash": "c789161ed43c",
+      "precision": 0.7434,
+      "recall": 0.875,
+      "f1_score": 0.8038,
+      "map_50": 0.7434,
+      "map_50_95": 0.5496,
+      "avg_preprocess_ms": 17.43,
+      "avg_inference_ms": 152.54,
+      "avg_postprocess_ms": 8.81,
+      "avg_total_latency_ms": 178.77,
+      "inference_fps": 5.59,
+      "per_class_metrics": {
+        "car": {
+          "precision": 0.3429,
+          "recall": 0.4286,
+          "f1": 0.381,
+          "gt_count": 28,
+          "pred_count": 35
+        },
+        "bus": {
+          "precision": 0.7576,
+          "recall": 0.8929,
+          "f1": 0.8197,
+          "gt_count": 28,
+          "pred_count": 33
+        },
+        "truck": {
+          "precision": 0.625,
+          "recall": 0.8,
+          "f1": 0.7018,
+          "gt_count": 25,
+          "pred_count": 32
+        },
+        "motorcycle": {
+          "precision": 1.0,
+          "recall": 0.8667,
+          "f1": 0.9286,
+          "gt_count": 15,
+          "pred_count": 13
+        }
+      }
+    },
+    "vehicle-detection-project-main_val": {
+      "dataset": "vehicle-detection-project-main",
+      "split": "val",
+      "images_evaluated": 80,
+      "gt_boxes": 97,
+      "pred_detections": 103,
+      "confidence_threshold": 0.25,
+      "nms_threshold": 0.45,
+      "model_name": "YOLOX-Nano-ONNX (Pretrained Base)",
+      "model_hash": "c789161ed43c",
+      "precision": 0.835,
+      "recall": 0.8866,
+      "f1_score": 0.86,
+      "map_50": 0.835,
+      "map_50_95": 0.6417,
+      "avg_preprocess_ms": 16.12,
+      "avg_inference_ms": 134.66,
+      "avg_postprocess_ms": 7.84,
+      "avg_total_latency_ms": 158.62,
+      "inference_fps": 6.3,
+      "per_class_metrics": {
+        "car": {
+          "precision": 0.4138,
+          "recall": 0.3871,
+          "f1": 0.4,
+          "gt_count": 31,
+          "pred_count": 29
+        },
+        "bus": {
+          "precision": 0.8,
+          "recall": 0.8,
+          "f1": 0.8,
+          "gt_count": 20,
+          "pred_count": 20
+        },
+        "truck": {
+          "precision": 0.4815,
+          "recall": 0.7647,
+          "f1": 0.5909,
+          "gt_count": 17,
+          "pred_count": 27
+        },
+        "motorcycle": {
+          "precision": 1.0,
+          "recall": 0.931,
+          "f1": 0.9643,
+          "gt_count": 29,
+          "pred_count": 27
+        }
+      }
+    },
+    "training_train": {
+      "dataset": "training",
+      "split": "train",
+      "images_evaluated": 117,
+      "gt_boxes": 4370,
+      "pred_detections": 3738,
+      "confidence_threshold": 0.25,
+      "nms_threshold": 0.45,
+      "model_name": "YOLOX-Nano-ONNX (Pretrained Base)",
+      "model_hash": "c789161ed43c",
+      "precision": 0.6552,
+      "recall": 0.5604,
+      "f1_score": 0.6041,
+      "map_50": 0.6552,
+      "map_50_95": 0.2658,
+      "avg_preprocess_ms": 17.08,
+      "avg_inference_ms": 153.33,
+      "avg_postprocess_ms": 11.71,
+      "avg_total_latency_ms": 182.12,
+      "inference_fps": 5.49,
+      "per_class_metrics": {
+        "car": {
+          "precision": 0.6288,
+          "recall": 0.5301,
+          "f1": 0.5753,
+          "gt_count": 3569,
+          "pred_count": 3009
+        },
+        "bus": {
+          "precision": 0.2736,
+          "recall": 0.618,
+          "f1": 0.3793,
+          "gt_count": 267,
+          "pred_count": 603
+        },
+        "truck": {
+          "precision": 0.0259,
+          "recall": 0.05,
+          "f1": 0.0341,
+          "gt_count": 60,
+          "pred_count": 116
+        },
+        "motorcycle": {
+          "precision": 0.1,
+          "recall": 0.0042,
+          "f1": 0.0081,
+          "gt_count": 237,
+          "pred_count": 10
+        }
+      }
+    },
+    "valid-fine-tuning_val": {
+      "dataset": "valid-fine-tuning",
+      "split": "val",
+      "images_evaluated": 11,
+      "gt_boxes": 428,
+      "pred_detections": 400,
+      "confidence_threshold": 0.25,
+      "nms_threshold": 0.45,
+      "model_name": "YOLOX-Nano-ONNX (Pretrained Base)",
+      "model_hash": "c789161ed43c",
+      "precision": 0.735,
+      "recall": 0.6869,
+      "f1_score": 0.7101,
+      "map_50": 0.735,
+      "map_50_95": 0.3808,
+      "avg_preprocess_ms": 15.87,
+      "avg_inference_ms": 133.25,
+      "avg_postprocess_ms": 11.63,
+      "avg_total_latency_ms": 160.75,
+      "inference_fps": 6.22,
+      "per_class_metrics": {
+        "car": {
+          "precision": 0.7039,
+          "recall": 0.6276,
+          "f1": 0.6636,
+          "gt_count": 341,
+          "pred_count": 304
+        },
+        "bus": {
+          "precision": 0.3286,
+          "recall": 0.92,
+          "f1": 0.4842,
+          "gt_count": 25,
+          "pred_count": 70
+        },
+        "truck": {
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1": 0.0,
+          "gt_count": 6,
+          "pred_count": 23
+        },
+        "motorcycle": {
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1": 0.0,
+          "gt_count": 27,
+          "pred_count": 3
+        }
+      }
+    },
+    "valid-self-learning_val_self_learning": {
+      "dataset": "valid-self-learning",
+      "split": "val_self_learning",
+      "images_evaluated": 6,
+      "gt_boxes": 247,
+      "pred_detections": 213,
+      "confidence_threshold": 0.25,
+      "nms_threshold": 0.45,
+      "model_name": "YOLOX-Nano-ONNX (Pretrained Base)",
+      "model_hash": "c789161ed43c",
+      "precision": 0.7793,
+      "recall": 0.6721,
+      "f1_score": 0.7217,
+      "map_50": 0.7793,
+      "map_50_95": 0.4169,
+      "avg_preprocess_ms": 13.85,
+      "avg_inference_ms": 146.27,
+      "avg_postprocess_ms": 11.46,
+      "avg_total_latency_ms": 171.58,
+      "inference_fps": 5.83,
+      "per_class_metrics": {
+        "car": {
+          "precision": 0.7759,
+          "recall": 0.6429,
+          "f1": 0.7031,
+          "gt_count": 210,
+          "pred_count": 174
+        },
+        "bus": {
+          "precision": 0.2581,
+          "recall": 0.8,
+          "f1": 0.3902,
+          "gt_count": 10,
+          "pred_count": 31
+        },
+        "truck": {
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1": 0.0,
+          "gt_count": 5,
+          "pred_count": 8
+        },
+        "motorcycle": {
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1": 0.0,
+          "gt_count": 11,
+          "pred_count": 0
+        }
+      }
+    }
+  },
+  "tracking_adapter": [
+    {
+      "sequence_id": "AICC22-Custom",
+      "original_video": "DATASETS\\Vehicle_Tracking\\AICC22-Custom\\AICC22-Custom_Original-video.mp4",
+      "gt_track_points": 1185,
+      "status": "ready_for_trajectory_matching"
+    },
+    {
+      "sequence_id": "VNTraffic",
+      "original_video": "DATASETS\\Vehicle_Tracking\\VNTraffic\\VNTraffic_Original-video.mp4",
+      "gt_track_points": 16036,
+      "status": "ready_for_trajectory_matching"
+    }
+  ]
+}

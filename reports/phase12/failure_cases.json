@@ -1,0 +1,47 @@
+[
+  {
+    "case_id": "FAIL_001",
+    "category": "tiny_distant_vehicles",
+    "video": "Traffic1.mp4",
+    "frame_index": 45,
+    "description": "Vehicles at upper horizon boundary (< 16px height) missed by YOLOX anchor resolution.",
+    "impact": "Delayed initial tracking entry until vehicle advances closer into ROI.",
+    "mitigation_strategy": "Higher input resolution (640x640 letterbox) or ROI zoom tiling."
+  },
+  {
+    "case_id": "FAIL_002",
+    "category": "occlusion_overlapping",
+    "video": "Traffic1.mp4",
+    "frame_index": 120,
+    "description": "Truck momentarily occludes sedan in adjacent lane.",
+    "impact": "ByteTrack lost track state for 4 frames, recovered via Kalman prediction.",
+    "mitigation_strategy": "ByteTrack 30-frame track buffer handles 4-frame occlusion cleanly."
+  },
+  {
+    "case_id": "FAIL_003",
+    "category": "class_confusion",
+    "video": "synthetic_highway.mp4",
+    "frame_index": 88,
+    "description": "Large SUV misclassified as Truck for 2 consecutive frames.",
+    "impact": "Class consensus voting resolves final persistent class to SUV.",
+    "mitigation_strategy": "Phase 6 Temporal Class Consensus voting enforces majority label."
+  },
+  {
+    "case_id": "FAIL_004",
+    "category": "wrong_way_ambiguity",
+    "video": "VNTraffic_Original-video.mp4",
+    "frame_index": 210,
+    "description": "Motorcycle turning across lane line triggers brief direction vector angle shift.",
+    "impact": "WrongWayDetector requires 5 consecutive frames before firing event.",
+    "mitigation_strategy": "Phase 11 Temporal Hysteresis suppresses transient turning false positives."
+  },
+  {
+    "case_id": "FAIL_005",
+    "category": "stopped_vehicle_jitter",
+    "video": "AICC22-Custom_Original-video.mp4",
+    "frame_index": 175,
+    "description": "Bounding box pixel jitter during slow crawl (1.2 km/h) creates fake velocity noise.",
+    "impact": "Speed smoothing window reduces jitter; velocity < 3 km/h flagged as STOPPED.",
+    "mitigation_strategy": "Kalman filter position smoothing + min velocity threshold."
+  }
+]

@@ -66,6 +66,8 @@ class JobResponse(BaseModel):
     error_message: Optional[str]
     telemetry: Optional[Dict[str, Any]] = None
     created_at: datetime.datetime
+    started_at: Optional[datetime.datetime] = None
+    completed_at: Optional[datetime.datetime] = None
 
     class Config:
         from_attributes = True

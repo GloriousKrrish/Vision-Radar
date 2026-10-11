@@ -31,3 +31,10 @@ data/reports/*.pdf
 .idea/
 .DS_Store
 Thumbs.db
+.gemini/
+
+# Large Datasets
+DATASETS/
+data/debug/
+data/dataset_audit_temp.json
+

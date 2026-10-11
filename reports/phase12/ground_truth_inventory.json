@@ -1,0 +1,90 @@
+{
+  "detection_gt": [
+    {
+      "dataset_name": "vehicle-detection-project-main",
+      "source_location": "DATASETS/vehicle-detection-project-main",
+      "sample_count": 874,
+      "splits": [
+        "train (714)",
+        "val (80)",
+        "test (80)"
+      ],
+      "annotation_type": "YOLO txt bounding boxes",
+      "classes": [
+        "car",
+        "bus",
+        "truck",
+        "motorcycle"
+      ],
+      "usable": true,
+      "evaluation_task": "Primary Object Detection Benchmark (Precision, Recall, mAP50)"
+    },
+    {
+      "dataset_name": "training",
+      "source_location": "DATASETS/training",
+      "sample_count": 117,
+      "splits": [
+        "train_subset"
+      ],
+      "annotation_type": "YOLO txt bounding boxes",
+      "classes": [
+        "car",
+        "bus",
+        "truck",
+        "motorcycle"
+      ],
+      "usable": true,
+      "evaluation_task": "Secondary Detection Subset Benchmark"
+    }
+  ],
+  "tracking_gt": [
+    {
+      "dataset_name": "Vehicle_Tracking",
+      "source_location": "DATASETS/Vehicle_Tracking",
+      "video_sequences": 4,
+      "annotation_count": 17221,
+      "annotation_type": "MOT JSON Trajectory Annotations",
+      "classes": [
+        "car",
+        "bus",
+        "truck",
+        "motorcycle"
+      ],
+      "usable": true,
+      "evaluation_task": "Multi-Object Tracking (IDF1, MOTA, ID Switches, Track Recall)"
+    }
+  ],
+  "event_gt": [
+    {
+      "dataset_name": "Real Traffic Video Suite",
+      "source_location": "data/videos/",
+      "video_count": 4,
+      "filenames": [
+        "Traffic1.mp4",
+        "synthetic_highway.mp4",
+        "VNTraffic_Original-video.mp4",
+        "AICC22-Custom_Original-video.mp4"
+      ],
+      "annotation_type": "Engineering Validated State Machine Assertions",
+      "usable": true,
+      "evaluation_task": "Traffic Intelligence & Temporal Hysteresis Evaluation"
+    }
+  ],
+  "speed_gt": {
+    "status": "BLOCKED",
+    "reason": "Independent physical speed ground truth unavailable locally. BrnoCompSpeed raw sensor data is missing.",
+    "available": false
+  },
+  "missing_required_assets": [
+    {
+      "asset": "BrnoCompSpeed Raw Videos & Radar Sensor Annotations",
+      "path": "DATASETS/BrnoCompSpeed-master",
+      "reason": "Only MATLAB script wrapper present; raw MP4 videos and radar speed logs are missing."
+    },
+    {
+      "asset": "DETRAC Raw Image Frames",
+      "path": "DATASETS/DETRAC-Test-Tra",
+      "reason": "Only XML/TXT detection files present; JPEG frame images missing from local directory."
+    }
+  ]
+}

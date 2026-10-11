@@ -6,6 +6,13 @@ import cv2
 from typing import List, Tuple, Dict, Any, Optional
 from visionradar.cv.detection.base import BaseDetector, Detection
 
+try:
+    import onnx
+    import onnxruntime as ort
+    _ORT_AVAILABLE = True
+except ImportError:
+    _ORT_AVAILABLE = False
+
 # COCO Dataset vehicle class mapping
 COCO_VEHICLE_CLASSES = {
     2: "Car",
@@ -16,7 +23,7 @@ COCO_VEHICLE_CLASSES = {
 
 class YOLOXDetector(BaseDetector):
     """
-    YOLOX / YOLO ONNX Real Object Detector utilizing OpenCV DNN engine on CPU/GPU.
+    YOLOX / YOLO ONNX Real Object Detector utilizing ONNX Runtime / OpenCV DNN engine on CPU/GPU.
     Supports genuine ONNX model weights loading, anchor grid decoding [1, 8400, 85],
     confidence filtering, NMS suppression, telemetry tracking, and transparent fallback accounting.
     """
@@ -37,6 +44,8 @@ class YOLOXDetector(BaseDetector):
         self.input_size = input_size
         self.device = device
         self.net = None
+        self.ort_session = None
+        self.ort_input_name = None
         self.valid_onnx_detector = False
         self.fallback_used = False
         self.fallback_reason = None
@@ -65,49 +74,67 @@ class YOLOXDetector(BaseDetector):
                 with open(target_path, "rb") as f:
                     self.model_hash = hashlib.sha256(f.read()).hexdigest()
 
-                self.net = cv2.dnn.readNetFromONNX(target_path)
-                if device.upper() == "GPU" and hasattr(cv2.dnn, 'DNN_BACKEND_CUDA'):
-                    self.net.setPreferableBackend(cv2.dnn.DNN_BACKEND_CUDA)
-                    self.net.setPreferableTarget(cv2.dnn.DNN_TARGET_CUDA)
-                else:
-                    self.net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
-                    self.net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
+                # 1. Try High-Performance ONNX Runtime CPU Engine First
+                if _ORT_AVAILABLE and device.upper() != "GPU":
+                    try:
+                        model_proto = onnx.load(target_path)
+                        model_proto.graph.input[0].type.tensor_type.shape.dim[2].dim_value = self.input_size[1]
+                        model_proto.graph.input[0].type.tensor_type.shape.dim[3].dim_value = self.input_size[0]
+                        model_proto.graph.output[0].type.tensor_type.shape.dim[1].dim_value = len(self.grids)
+                        sess_opts = ort.SessionOptions()
+                        sess_opts.intra_op_num_threads = min(4, os.cpu_count() or 4)
+                        sess_opts.log_severity_level = 3  # suppress harmless shape warnings
+                        sess_opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+                        self.ort_session = ort.InferenceSession(
+                            model_proto.SerializeToString(), sess_opts, providers=['CPUExecutionProvider']
+                        )
+                        self.ort_input_name = self.ort_session.get_inputs()[0].name
+                        self.valid_onnx_detector = True
+                        self.fallback_used = False
+                        self.fallback_reason = None
+                        self.model_name = "YOLOX-Nano-ONNX"
+                        self.detector_actual = "YOLOX-Nano-ONNX"
+                        self.backend_name = "ONNXRuntime-CPU (Optimized)"
+                        self.status = "ONLINE"
+                    except Exception as e_ort:
+                        self.ort_session = None
 
-                # Dry-run test input tensor to verify detector tensor layout
-                dummy_input = np.zeros((1, 3, self.input_size[1], self.input_size[0]), dtype=np.float32)
-                self.net.setInput(dummy_input)
-                test_output = self.net.forward()
-                
-                # Check if ONNX output is a genuine YOLOX bounding box detection tensor [1, N, 85/6]
-                if len(test_output.shape) == 3 and test_output.shape[2] in (6, 85, 84, 80):
-                    self.valid_onnx_detector = True
-                    self.fallback_used = False
-                    self.fallback_reason = None
-                    self.model_name = "YOLOX-Nano-ONNX"
-                    self.detector_actual = "YOLOX-Nano-ONNX"
-                    self.backend_name = f"OpenCV-DNN ({self.device})"
-                    self.status = "ONLINE"
-                elif len(test_output.shape) == 2 and test_output.shape[1] in (6, 85, 84, 80):
-                    self.valid_onnx_detector = True
-                    self.fallback_used = False
-                    self.fallback_reason = None
-                    self.model_name = "YOLOX-Nano-ONNX"
-                    self.detector_actual = "YOLOX-Nano-ONNX"
-                    self.backend_name = f"OpenCV-DNN ({self.device})"
-                    self.status = "ONLINE"
-                else:
-                    self.valid_onnx_detector = False
-                    self.fallback_used = True
-                    self.fallback_reason = f"Non-detection tensor shape {test_output.shape}"
-                    self.model_name = "YOLOX-ONNX (Fallback Active)"
-                    self.detector_actual = "MOG2 Baseline"
-                    self.backend_name = "MOG2 Subspace (Fallback Active)"
-                    self.status = "FALLBACK_ACTIVE"
-                    print(f"[YOLOX FORENSIC] ONNX output shape {test_output.shape} is non-detection. Activating FALLBACK_ACTIVE.")
+                # 2. OpenCV DNN Engine (Primary if GPU, or Fallback if ORT fails)
+                if self.ort_session is None:
+                    self.net = cv2.dnn.readNetFromONNX(target_path)
+                    if device.upper() == "GPU" and hasattr(cv2.dnn, 'DNN_BACKEND_CUDA'):
+                        self.net.setPreferableBackend(cv2.dnn.DNN_BACKEND_CUDA)
+                        self.net.setPreferableTarget(cv2.dnn.DNN_TARGET_CUDA)
+                    else:
+                        self.net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
+                        self.net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
+
+                    dummy_input = np.zeros((1, 3, self.input_size[1], self.input_size[0]), dtype=np.float32)
+                    self.net.setInput(dummy_input)
+                    test_output = self.net.forward()
+
+                    if (len(test_output.shape) == 3 and test_output.shape[2] in (6, 85, 84, 80)) or \
+                       (len(test_output.shape) == 2 and test_output.shape[1] in (6, 85, 84, 80)):
+                        self.valid_onnx_detector = True
+                        self.fallback_used = False
+                        self.fallback_reason = None
+                        self.model_name = "YOLOX-Nano-ONNX"
+                        self.detector_actual = "YOLOX-Nano-ONNX"
+                        self.backend_name = f"OpenCV-DNN ({self.device})"
+                        self.status = "ONLINE"
+                    else:
+                        self.valid_onnx_detector = False
+                        self.fallback_used = True
+                        self.fallback_reason = f"Non-detection tensor shape {test_output.shape}"
+                        self.model_name = "YOLOX-ONNX (Fallback Active)"
+                        self.detector_actual = "MOG2 Baseline"
+                        self.backend_name = "MOG2 Subspace (Fallback Active)"
+                        self.status = "FALLBACK_ACTIVE"
 
             except Exception as e:
                 print(f"[YOLOX FORENSIC] Failed to load ONNX model at {target_path}: {e}")
                 self.net = None
+                self.ort_session = None
                 self.valid_onnx_detector = False
                 self.fallback_used = True
                 self.fallback_reason = f"Failed to load model file: {e}"
@@ -152,65 +179,62 @@ class YOLOXDetector(BaseDetector):
         h, w = image.shape[:2]
         t0 = time.perf_counter()
 
-        if self.net is not None and self.valid_onnx_detector:
-            # 1. Genuine ONNX Inference via OpenCV DNN with Letterbox Preprocessing
+        if self.valid_onnx_detector and (self.ort_session is not None or self.net is not None):
             target_w, target_h = self.input_size
             scale = min(target_w / float(w), target_h / float(h))
             nw, nh = int(round(w * scale)), int(round(h * scale))
             resized = cv2.resize(image, (nw, nh), interpolation=cv2.INTER_LINEAR)
             padded = np.full((target_h, target_w, 3), 114, dtype=np.uint8)
-            
             pad_left = int(round((target_w - nw) / 2.0))
             pad_top = int(round((target_h - nh) / 2.0))
             padded[pad_top:pad_top+nh, pad_left:pad_left+nw] = resized
 
-            # YOLOX expects uint8 float32 range [0..255] in BGR color space
-            blob = cv2.dnn.blobFromImage(
-                padded, 1.0, self.input_size, (0, 0, 0), swapRB=False, crop=False
-            )
-            self.net.setInput(blob)
-            outputs = self.net.forward()
-
-            preds = outputs[0] if len(outputs.shape) == 3 else outputs
-            raw_count = len(preds)
-
-            # Grid Decoding Check
-            if preds.shape[0] == len(self.grids):
-                # Vectorized Grid Decoding
-                cx = (preds[:, 0] + self.grids[:, 0]) * self.strides
-                cy = (preds[:, 1] + self.grids[:, 1]) * self.strides
-                bw = np.exp(np.clip(preds[:, 2], -10.0, 10.0)) * self.strides
-                bh = np.exp(np.clip(preds[:, 3], -10.0, 10.0)) * self.strides
+            if self.ort_session is not None:
+                blob = padded.transpose((2, 0, 1)).astype(np.float32)[np.newaxis, ...]
+                outputs = self.ort_session.run(None, {self.ort_input_name: blob})
+                preds = outputs[0][0]
             else:
-                cx, cy, bw, bh = preds[:, 0], preds[:, 1], preds[:, 2], preds[:, 3]
+                blob = cv2.dnn.blobFromImage(padded, 1.0, self.input_size, (0, 0, 0), swapRB=False, crop=False)
+                self.net.setInput(blob)
+                outputs = self.net.forward()
+                preds = outputs[0] if len(outputs.shape) == 3 else outputs
 
+            raw_count = len(preds)
             obj_conf = preds[:, 4]
             cls_conf = preds[:, 5:]
-
             class_ids = np.argmax(cls_conf, axis=1)
             class_max_scores = np.max(cls_conf, axis=1)
             total_scores = obj_conf * class_max_scores
 
-            # Filter candidates above confidence threshold
             cand_indices = np.where(total_scores >= conf_thresh)[0]
-
             boxes, confidences, final_class_ids = [], [], []
 
-            for idx in cand_indices:
-                cid = int(class_ids[idx])
-                if cid in COCO_VEHICLE_CLASSES:
-                    c_x, c_y = float(cx[idx]), float(cy[idx])
-                    b_w, b_h = float(bw[idx]), float(bh[idx])
+            if len(cand_indices) > 0:
+                if preds.shape[0] == len(self.grids):
+                    c_grids = self.grids[cand_indices]
+                    c_strides = self.strides[cand_indices]
+                    cx = (preds[cand_indices, 0] + c_grids[:, 0]) * c_strides
+                    cy = (preds[cand_indices, 1] + c_grids[:, 1]) * c_strides
+                    bw = np.exp(np.clip(preds[cand_indices, 2], -10.0, 10.0)) * c_strides
+                    bh = np.exp(np.clip(preds[cand_indices, 3], -10.0, 10.0)) * c_strides
+                else:
+                    cx = preds[cand_indices, 0]
+                    cy = preds[cand_indices, 1]
+                    bw = preds[cand_indices, 2]
+                    bh = preds[cand_indices, 3]
 
-                    # Letterbox un-padding and un-scaling back to original image space
-                    x1 = (c_x - pad_left - b_w / 2.0) / scale
-                    y1 = (c_y - pad_top - b_h / 2.0) / scale
-                    bw_s = b_w / scale
-                    bh_s = b_h / scale
-
-                    boxes.append([int(x1), int(y1), int(bw_s), int(bh_s)])
-                    confidences.append(float(total_scores[idx]))
-                    final_class_ids.append(cid)
+                for i, idx in enumerate(cand_indices):
+                    cid = int(class_ids[idx])
+                    if cid in COCO_VEHICLE_CLASSES:
+                        c_x, c_y = float(cx[i]), float(cy[i])
+                        b_w, b_h = float(bw[i]), float(bh[i])
+                        x1 = (c_x - pad_left - b_w / 2.0) / scale
+                        y1 = (c_y - pad_top - b_h / 2.0) / scale
+                        bw_s = b_w / scale
+                        bh_s = b_h / scale
+                        boxes.append([int(x1), int(y1), int(bw_s), int(bh_s)])
+                        confidences.append(float(total_scores[idx]))
+                        final_class_ids.append(cid)
 
             indices = cv2.dnn.NMSBoxes(boxes, confidences, conf_thresh, self.nms_threshold)
             post_nms_count = len(indices) if len(indices) > 0 else 0
@@ -228,7 +252,6 @@ class YOLOXDetector(BaseDetector):
 
             t1 = time.perf_counter()
             elapsed_ms = (t1 - t0) * 1000.0
-
             self.total_frames += 1
             self.last_inference_ms = elapsed_ms
             self.total_inference_ms += elapsed_ms
@@ -237,79 +260,7 @@ class YOLOXDetector(BaseDetector):
             self.total_vehicle_detections += len(detections)
             return detections
 
-    def detect_verbose(self, image: np.ndarray, confidence_threshold: Optional[float] = None) -> Tuple[np.ndarray, List[Any], List[Any], List[Detection]]:
-        conf_thresh = confidence_threshold if confidence_threshold is not None else self.confidence_threshold
-        if image is None or image.size == 0 or self.net is None:
-            return np.zeros((0,)), [], [], []
-
-        h, w = image.shape[:2]
-        target_w, target_h = self.input_size
-        scale = min(target_w / float(w), target_h / float(h))
-        nw, nh = int(round(w * scale)), int(round(h * scale))
-        resized = cv2.resize(image, (nw, nh), interpolation=cv2.INTER_LINEAR)
-        padded = np.full((target_h, target_w, 3), 114, dtype=np.uint8)
-        
-        pad_left = int(round((target_w - nw) / 2.0))
-        pad_top = int(round((target_h - nh) / 2.0))
-        padded[pad_top:pad_top+nh, pad_left:pad_left+nw] = resized
-
-        blob = cv2.dnn.blobFromImage(padded, 1.0, self.input_size, (0, 0, 0), swapRB=False, crop=False)
-        self.net.setInput(blob)
-        outputs = self.net.forward()
-        preds = outputs[0] if len(outputs.shape) == 3 else outputs
-
-        if preds.shape[0] == len(self.grids):
-            cx = (preds[:, 0] + self.grids[:, 0]) * self.strides
-            cy = (preds[:, 1] + self.grids[:, 1]) * self.strides
-            bw = np.exp(np.clip(preds[:, 2], -10.0, 10.0)) * self.strides
-            bh = np.exp(np.clip(preds[:, 3], -10.0, 10.0)) * self.strides
-        else:
-            cx, cy, bw, bh = preds[:, 0], preds[:, 1], preds[:, 2], preds[:, 3]
-
-        obj_conf = preds[:, 4]
-        cls_conf = preds[:, 5:]
-        class_ids = np.argmax(cls_conf, axis=1)
-        class_max_scores = np.max(cls_conf, axis=1)
-        total_scores = obj_conf * class_max_scores
-
-        cand_indices = np.where(total_scores >= conf_thresh)[0]
-        boxes, confidences, final_class_ids = [], [], []
-
-        for idx in cand_indices:
-            cid = int(class_ids[idx])
-            if cid in COCO_VEHICLE_CLASSES:
-                c_x, c_y = float(cx[idx]), float(cy[idx])
-                b_w, b_h = float(bw[idx]), float(bh[idx])
-
-                x1 = (c_x - pad_left - b_w / 2.0) / scale
-                y1 = (c_y - pad_top - b_h / 2.0) / scale
-                bw_s = b_w / scale
-                bh_s = b_h / scale
-
-                boxes.append([int(x1), int(y1), int(bw_s), int(bh_s)])
-                confidences.append(float(total_scores[idx]))
-                final_class_ids.append(cid)
-
-        indices = cv2.dnn.NMSBoxes(boxes, confidences, conf_thresh, self.nms_threshold)
-        post_nms_dets = []
-        vehicle_dets = []
-
-        if len(indices) > 0:
-            for idx in indices.flatten():
-                bx, by, bw_i, bh_i = boxes[idx]
-                cid = final_class_ids[idx]
-                det = Detection(
-                    class_id=cid,
-                    class_name=COCO_VEHICLE_CLASSES.get(cid, "Car"),
-                    confidence=confidences[idx],
-                    bbox=(float(max(0, bx)), float(max(0, by)), float(min(w, bx + bw_i)), float(min(h, by + bh_i)))
-                )
-                post_nms_dets.append(det)
-                vehicle_dets.append(det)
-
-        return outputs, cand_indices.tolist(), post_nms_dets, vehicle_dets
-
-        # 2. Transparent Fallback Execution Mode (MOG2 / Subspace Contour Vehicle Detector)
+        # Transparent Fallback Execution Mode (MOG2 / Subspace Contour Vehicle Detector)
         horizon_y = int(h * 0.15)
         roi = image[horizon_y:, :]
         gray_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY) if len(roi.shape) == 3 else roi
@@ -359,6 +310,78 @@ class YOLOXDetector(BaseDetector):
         self.total_post_nms_detections += len(detections)
         self.total_vehicle_detections += len(detections)
         return detections
+
+    def detect_verbose(self, image: np.ndarray, confidence_threshold: Optional[float] = None) -> Tuple[np.ndarray, List[Any], List[Any], List[Detection]]:
+        conf_thresh = confidence_threshold if confidence_threshold is not None else self.confidence_threshold
+        if image is None or image.size == 0 or (self.net is None and self.ort_session is None):
+            return np.zeros((0,)), [], [], []
+
+        h, w = image.shape[:2]
+        target_w, target_h = self.input_size
+        scale = min(target_w / float(w), target_h / float(h))
+        nw, nh = int(round(w * scale)), int(round(h * scale))
+        resized = cv2.resize(image, (nw, nh), interpolation=cv2.INTER_LINEAR)
+        padded = np.full((target_h, target_w, 3), 114, dtype=np.uint8)
+        pad_left = int(round((target_w - nw) / 2.0))
+        pad_top = int(round((target_h - nh) / 2.0))
+        padded[pad_top:pad_top+nh, pad_left:pad_left+nw] = resized
+
+        if self.ort_session is not None:
+            blob = padded.transpose((2, 0, 1)).astype(np.float32)[np.newaxis, ...]
+            outputs = self.ort_session.run(None, {self.ort_input_name: blob})
+            preds = outputs[0][0]
+        else:
+            blob = cv2.dnn.blobFromImage(padded, 1.0, self.input_size, (0, 0, 0), swapRB=False, crop=False)
+            self.net.setInput(blob)
+            outputs = self.net.forward()
+            preds = outputs[0] if len(outputs.shape) == 3 else outputs
+
+        if preds.shape[0] == len(self.grids):
+            cx = (preds[:, 0] + self.grids[:, 0]) * self.strides
+            cy = (preds[:, 1] + self.grids[:, 1]) * self.strides
+            bw = np.exp(np.clip(preds[:, 2], -10.0, 10.0)) * self.strides
+            bh = np.exp(np.clip(preds[:, 3], -10.0, 10.0)) * self.strides
+        else:
+            cx, cy, bw, bh = preds[:, 0], preds[:, 1], preds[:, 2], preds[:, 3]
+
+        obj_conf = preds[:, 4]
+        cls_conf = preds[:, 5:]
+        class_ids = np.argmax(cls_conf, axis=1)
+        class_max_scores = np.max(cls_conf, axis=1)
+        total_scores = obj_conf * class_max_scores
+
+        cand_indices = np.where(total_scores >= conf_thresh)[0]
+        boxes, confidences, final_class_ids = [], [], []
+
+        for idx in cand_indices:
+            cid = int(class_ids[idx])
+            if cid in COCO_VEHICLE_CLASSES:
+                c_x, c_y = float(cx[idx]), float(cy[idx])
+                b_w, b_h = float(bw[idx]), float(bh[idx])
+                x1 = (c_x - pad_left - b_w / 2.0) / scale
+                y1 = (c_y - pad_top - b_h / 2.0) / scale
+                boxes.append([int(x1), int(y1), int(b_w / scale), int(b_h / scale)])
+                confidences.append(float(total_scores[idx]))
+                final_class_ids.append(cid)
+
+        indices = cv2.dnn.NMSBoxes(boxes, confidences, conf_thresh, self.nms_threshold)
+        post_nms_dets = []
+        vehicle_dets = []
+
+        if len(indices) > 0:
+            for idx in indices.flatten():
+                bx, by, bw_i, bh_i = boxes[idx]
+                cid = final_class_ids[idx]
+                det = Detection(
+                    class_id=cid,
+                    class_name=COCO_VEHICLE_CLASSES.get(cid, "Car"),
+                    confidence=confidences[idx],
+                    bbox=(float(max(0, bx)), float(max(0, by)), float(min(w, bx + bw_i)), float(min(h, by + bh_i)))
+                )
+                post_nms_dets.append(det)
+                vehicle_dets.append(det)
+
+        return outputs, cand_indices.tolist(), post_nms_dets, vehicle_dets
 
     def get_telemetry(self) -> Dict[str, Any]:
         avg_ms = self.total_inference_ms / max(1, self.total_frames)
