@@ -68,8 +68,8 @@ export const ArchitectureView: React.FC = () => {
 
   const curlStr =
     method === 'WS'
-      ? `wscat -c ws://localhost:8000${path}`
-      : `curl -X ${method} http://localhost:8000${path}` +
+      ? `wscat -c ws://localhost:4000${path}`
+      : `curl -X ${method} http://localhost:4000${path}` +
         (epData.b ? ` \\\n  -H "Content-Type: application/json" \\\n  -d '${JSON.stringify(epData.b)}'` : '');
 
   const nodes = [

@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { apiUrl } from './config/api';
 import { WorkbenchView } from './components/WorkbenchView';
 import { CalibrationView } from './components/CalibrationView';
 import { ExperimentsView } from './components/ExperimentsView';
@@ -11,7 +12,7 @@ export const App: React.FC = () => {
   const [healthStatus, setHealthStatus] = useState<string>('Online');
 
   useEffect(() => {
-    fetch('/api/v1/health')
+    fetch(apiUrl('/api/v1/health'))
       .then(res => res.json())
       .then(data => {
         if (data.status === 'online') {

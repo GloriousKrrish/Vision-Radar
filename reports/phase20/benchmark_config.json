@@ -1,0 +1,20 @@
+{
+  "phase": 20,
+  "model_path": "data/models/yolox_nano.onnx",
+  "model_sha256": "c789161ed43c8269",
+  "detector_input_resolution": [
+    640,
+    640
+  ],
+  "conf_threshold": 0.1,
+  "high_threshold": 0.4,
+  "low_threshold": 0.1,
+  "iou_threshold": 0.3,
+  "max_age": 30,
+  "datasets": [
+    "VNTraffic",
+    "AICC22-Custom"
+  ],
+  "evaluation_protocol": "CLEAR-MOT (Bernardin 2008), IDF1 (Ristani 2016), HOTA (Luiten 2021)",
+  "matching_iou_threshold": 0.5
+}

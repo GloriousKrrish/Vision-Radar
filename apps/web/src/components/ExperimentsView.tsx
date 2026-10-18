@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { apiUrl } from '../config/api';
 
 function rnd(s: number) {
   return () => (s = (s * 16807) % 2147483647) / 2147483647;
@@ -12,7 +13,7 @@ export const ExperimentsView: React.FC = () => {
 
   // Fetch real experiment benchmarks from backend
   useEffect(() => {
-    fetch('/api/v1/experiments')
+    fetch(apiUrl('/api/v1/experiments'))
       .then(res => res.json())
       .then(data => {
         if (Array.isArray(data) && data.length > 0) {

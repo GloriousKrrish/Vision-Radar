@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { apiUrl } from '../config/api';
 
 export const ResearchWorkbenchView: React.FC = () => {
   const [subTab, setSubTab] = useState<'list' | 'detail' | 'compare' | 'ablations' | 'failures' | 'explain' | 'report'>('list');
@@ -25,7 +26,7 @@ export const ResearchWorkbenchView: React.FC = () => {
   }, [selectedExpId]);
 
   const fetchExperiments = () => {
-    fetch('/api/v1/experiments')
+    fetch(apiUrl('/api/v1/experiments'))
       .then(res => res.json())
       .then(data => {
         setExperiments(data);
@@ -38,7 +39,7 @@ export const ResearchWorkbenchView: React.FC = () => {
   };
 
   const fetchExperimentDetail = (id: string) => {
-    fetch(`/api/v1/experiments/${id}`)
+    fetch(apiUrl(`/api/v1/experiments/${id}`))
       .then(res => res.json())
       .then(data => {
         setExpDetail(data);
@@ -52,28 +53,28 @@ export const ResearchWorkbenchView: React.FC = () => {
   };
 
   const fetchComparison = () => {
-    fetch(`/api/v1/experiments/compare?exp_a_id=${expA}&exp_b_id=${expB}`)
+    fetch(apiUrl(`/api/v1/experiments/compare?exp_a_id=${expA}&exp_b_id=${expB}`))
       .then(res => res.json())
       .then(data => setCompData(data))
       .catch(err => console.error(err));
   };
 
   const fetchExplainability = (expId: string, anomId: string) => {
-    fetch(`/api/v1/experiments/${expId}/explainability/${anomId}`)
+    fetch(apiUrl(`/api/v1/experiments/${expId}/explainability/${anomId}`))
       .then(res => res.json())
       .then(data => setExplainData(data))
       .catch(err => console.error(err));
   };
 
   const fetchReport = (id: string) => {
-    fetch(`/api/v1/experiments/${id}/report`)
+    fetch(apiUrl(`/api/v1/experiments/${id}/report`))
       .then(res => res.json())
       .then(data => setReportMarkdown(data.report_markdown))
       .catch(err => console.error(err));
   };
 
   const handleReproduce = (id: string) => {
-    fetch(`/api/v1/experiments/${id}/reproduce`, { method: 'POST' })
+    fetch(apiUrl(`/api/v1/experiments/${id}/reproduce`), { method: 'POST' })
       .then(res => res.json())
       .then(data => alert(`Reproduction Triggered: ${data.message}`))
       .catch(err => alert(`Reproduction Failed: ${err}`));

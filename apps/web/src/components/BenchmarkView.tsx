@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { apiUrl } from '../config/api';
 
 export const BenchmarkView: React.FC = () => {
   const [loading, setLoading] = useState(true);
@@ -12,7 +13,7 @@ export const BenchmarkView: React.FC = () => {
   const fetchBenchmarkData = async () => {
     setLoading(true);
     try {
-      const res = await fetch('/api/v1/benchmarks/summary');
+      const res = await fetch(apiUrl('/api/v1/benchmarks/summary'));
       if (res.ok) {
         const json = await res.json();
         setData(json);
@@ -30,7 +31,7 @@ export const BenchmarkView: React.FC = () => {
   const runBenchmark = async () => {
     setLoading(true);
     try {
-      const res = await fetch('/api/v1/benchmarks/run', { method: 'POST' });
+      const res = await fetch(apiUrl('/api/v1/benchmarks/run'), { method: 'POST' });
       if (res.ok) {
         const json = await res.json();
         setData(json);

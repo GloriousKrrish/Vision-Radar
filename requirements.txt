@@ -3,7 +3,8 @@ opencv-python-headless
 scipy
 pandas
 fastapi
-uvicorn
+uvicorn[standard]
+websockets
 sqlalchemy
 pydantic
 pydantic-settings

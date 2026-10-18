@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { apiUrl, getWsUrl } from '../config/api';
 
 // ===========================================================================
 // Constants & Canvas Resolution
@@ -81,6 +82,7 @@ export const WorkbenchView: React.FC = () => {
   // --- demo/real mode ---
   const [isRealVideo, setIsRealVideo] = useState(true);
   const [srcName, setSrcName] = useState('Traffic1.mp4');
+  const [videoSrc, setVideoSrc] = useState<string | null>(null);
 
   // --- job lifecycle & telemetry ---
   const [pipelineStage, setPipelineStage] = useState<PipelineStage>('IDLE');
@@ -102,10 +104,12 @@ export const WorkbenchView: React.FC = () => {
   const [telemetry, setTelemetry] = useState<any | null>(null);
   const [realCalib, setRealCalib] = useState<any | null>(null);
 
-  // --- inspector ---
+  // --- inspector & live log ---
   const [selTrack, setSelTrack] = useState<number | null>(null);
   const [violations, setViolations] = useState<any[]>([]);
   const [speedLimit, setSpeedLimit] = useState(80);
+  const [sidebarTab, setSidebarTab] = useState<'log' | 'inspector'>('log');
+  const [logFilter, setLogFilter] = useState<'all' | 'active' | 'speeding'>('all');
 
   // --- refs ---
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -139,39 +143,81 @@ export const WorkbenchView: React.FC = () => {
   // =========================================================================
   useEffect(() => {
     if (pipelineStage !== 'IDLE') return;
-    const loadLatest = async () => {
+    const selectCompletedJob = async () => {
       try {
-        const res = await fetch('/api/v1/jobs?status=SUCCEEDED');
+        const res = await fetch(apiUrl('/api/v1/jobs?status=SUCCEEDED'));
         if (!res.ok) return;
         const jobs = await res.json();
         if (!jobs?.length) return;
-        const job = jobs[0];
+        let job = null;
+        for (const j of jobs) {
+          try {
+            // Verify video stream is physically available on disk (HEAD request)
+            const check = await fetch(apiUrl(`/api/v1/videos/${j.video_id}/stream`), { method: 'HEAD' });
+            if (check.ok) {
+              job = j;
+              break;
+            }
+          } catch {}
+        }
+        if (!job) return;
+
+        setIsRealVideo(true);
+        isRealVideoRef.current = true;
         setActiveJobId(job.id);
+        activeJobIdRef.current = job.id;
         setJobStatusText(`Job #${job.id} Complete — REAL VIDEO · LIVE AI`);
         setPipelineStage('COMPLETED');
         if (job.telemetry) setTelemetry(job.telemetry);
 
-        const trkRes = await fetch(`/api/v1/jobs/${job.id}/tracks`);
-        if (trkRes.ok) {
-          const trkData = await trkRes.json();
-          if (trkData?.length) setRealTracks(trkData);
+        rtFrameBufferRef.current.clear();
+        frameMapRef.current.clear();
+
+        const streamUrl = apiUrl(`/api/v1/videos/${job.video_id}/stream`);
+        setVideoSrc(streamUrl);
+        if (videoRef.current) {
+          videoRef.current.muted = true;
+          videoRef.current.defaultMuted = true;
+          videoRef.current.src = streamUrl;
+          videoRef.current.loop = true;
+          videoRef.current.load();
+          videoRef.current.play().catch(() => {});
         }
-        const calibRes = await fetch(`/api/v1/videos/${job.video_id}/calibrations`);
-        if (calibRes.ok) {
+
+        const [trkRes, calibRes, vidInfoRes] = await Promise.all([
+          fetch(apiUrl(`/api/v1/jobs/${job.id}/tracks`)).catch(() => null),
+          fetch(apiUrl(`/api/v1/videos/${job.video_id}/calibrations`)).catch(() => null),
+          fetch(apiUrl(`/api/v1/videos/${job.video_id}`)).catch(() => null)
+        ]);
+
+        if (vidInfoRes && vidInfoRes.ok) {
+          const vData = await vidInfoRes.json();
+          if (vData.filename) setSrcName(vData.filename);
+          setTelemetry((prev: any) => ({
+            ...(prev || {}),
+            source_width: vData.width || prev?.source_width || 1920,
+            source_height: vData.height || prev?.source_height || 1080,
+            video_fps: vData.fps || prev?.video_fps || 29.97,
+            video_duration_sec: vData.duration_sec || prev?.video_duration_sec || 0.0,
+            total_frames: prev?.total_frames || Math.floor((vData.duration_sec || 0) * (vData.fps || 29.97))
+          }));
+        }
+
+        if (trkRes && trkRes.ok) {
+          const trkData = await trkRes.json();
+          if (trkData?.length) {
+            setRealTracks(trkData);
+          }
+        }
+        if (calibRes && calibRes.ok) {
           const calibData = await calibRes.json();
           if (calibData?.length) setRealCalib(calibData[0]);
-        }
-        if (!videoRef.current) {
-          const vid = document.createElement('video');
-          vid.src = `/api/v1/videos/${job.video_id}/stream`;
-          vid.muted = true; vid.loop = true; vid.play().catch(() => {});
-          videoRef.current = vid;
         }
       } catch (e) {
         console.error('Auto-load failed:', e);
       }
     };
-    loadLatest();
+    selectCompletedJob();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -182,6 +228,15 @@ export const WorkbenchView: React.FC = () => {
     const map = new Map<number, any[]>();
     realTracks.forEach((trk: any) => {
       const traj = trk.trajectory || [];
+      // Pre-compute avg/max speed from speed_measurements for this track
+      const validSpeeds = (trk.speed_measurements || [])
+        .map((s: any) => s.smoothed_kmh ?? s.instantaneous_kmh)
+        .filter((v: any) => v != null && v > 0);
+      const trkAvgSpeed = validSpeeds.length > 0
+        ? Math.round(validSpeeds.reduce((a: number, b: number) => a + b, 0) / validSpeeds.length * 10) / 10
+        : null;
+      const trkMaxSpeed = validSpeeds.length > 0 ? Math.round(Math.max(...validSpeeds) * 10) / 10 : null;
+      const trkMinSpeed = validSpeeds.length > 0 ? Math.round(Math.min(...validSpeeds) * 10) / 10 : null;
       traj.forEach((pt: any) => {
         const f = pt.frame_index;
         if (f === undefined || f === null) return;
@@ -193,13 +248,63 @@ export const WorkbenchView: React.FC = () => {
         const speedInfo = trk.speed_measurements?.find(
           (s: any) => s.frame === f || s.frame_index === f
         );
-        const speedKmh = speedInfo?.smoothed_kmh ?? speedInfo?.instantaneous_kmh ?? null;
+        let speedKmh = speedInfo?.smoothed_kmh ?? speedInfo?.instantaneous_kmh ?? null;
         let speedStatus = speedInfo?.error_components?.validity;
-        if (!speedStatus) {
-          speedStatus = (speedKmh != null && speedKmh > 0) ? 'VALID' : 'CALCULATING...';
+        let speedKmhCalibrated = (speedKmh !== null && speedKmh > 0 && (speedStatus === 'VALID' || !speedStatus)) ? speedKmh : null;
+        let measurementState: 'CALIBRATED_SPEED' | 'UNCALIBRATED_MOTION' | 'SPEED_UNAVAILABLE' = 'SPEED_UNAVAILABLE';
+        let motionPxS: number | null = null;
+
+        // Optical displacement motion fallback (Category C: uncalibrated assumed scale)
+        if ((speedKmh === null || speedKmh <= 0) && traj.length >= 2) {
+          const ptIdx = traj.findIndex((p: any) => p.frame_index === f);
+          if (ptIdx >= 1) {
+            const prevPt = traj[Math.max(0, ptIdx - 4)];
+            const b1 = pt.bbox;
+            const b0 = prevPt.bbox;
+            if (b1 && b0 && b1.length >= 4 && b0.length >= 4) {
+              const cx1 = (b1[0] + (b1[2] > b1[0] ? b1[2] : b1[0] + b1[2])) / 2;
+              const cy1 = (b1[1] + (b1[3] > b1[1] ? b1[3] : b1[1] + b1[3])) / 2;
+              const cx0 = (b0[0] + (b0[2] > b0[0] ? b0[2] : b0[0] + b0[2])) / 2;
+              const cy0 = (b0[1] + (b0[3] > b0[1] ? b0[3] : b0[1] + b0[3])) / 2;
+              const dist = Math.hypot(cx1 - cx0, cy1 - cy0);
+              const df = Math.max(1, f - prevPt.frame_index);
+              const dt = df / (telemetry?.video_fps || 29.97);
+              if (dt > 0) {
+                motionPxS = Math.round(dist / dt);
+                const est = Math.round((dist * 0.05 / dt) * 3.6);
+                if (est > 5 && est < 220) {
+                  speedKmh = est;
+                  speedStatus = 'UNCALIBRATED_MOTION';
+                  measurementState = 'UNCALIBRATED_MOTION';
+                }
+              }
+            }
+          }
         }
+
+        if (speedKmhCalibrated !== null && speedKmhCalibrated > 0) {
+          measurementState = 'CALIBRATED_SPEED';
+          speedStatus = 'VALID';
+        } else if (measurementState !== 'UNCALIBRATED_MOTION') {
+          measurementState = 'SPEED_UNAVAILABLE';
+          if (!speedStatus) {
+            speedStatus = realCalib ? 'CALCULATING...' : 'CALIBRATION_REQUIRED';
+          }
+        }
+
         if (!map.has(f)) map.set(f, []);
-        map.get(f)!.push({ track_id: trk.track_id, vehicle_class: trk.vehicle_class, confidence: trk.confidence, rx, ry, rw, rh, speedKmh, speedStatus });
+        map.get(f)!.push({
+          track_id: trk.track_id, vehicle_class: trk.vehicle_class,
+          confidence: trk.confidence, rx, ry, rw, rh,
+          speedKmh,
+          speedKmhCalibrated,
+          measurementState,
+          motionPxS,
+          speedStatus,
+          avgSpeedKmh: trkAvgSpeed, maxSpeedKmh: trkMaxSpeed, minSpeedKmh: trkMinSpeed,
+          firstFrame: trk.first_frame, lastFrame: trk.last_frame,
+          detectionCount: traj.length
+        });
       });
     });
     frameMapRef.current = map;
@@ -215,9 +320,9 @@ export const WorkbenchView: React.FC = () => {
     }
     try {
       const [trkRes, violsRes, jobRes] = await Promise.all([
-        fetch(`/api/v1/jobs/${jobId}/tracks`).catch(() => null),
-        fetch(`/api/v1/violations?job_id=${jobId}&limit=30`).catch(() => null),
-        fetch(`/api/v1/jobs/${jobId}`).catch(() => null)
+        fetch(apiUrl(`/api/v1/jobs/${jobId}/tracks`)).catch(() => null),
+        fetch(apiUrl(`/api/v1/violations?job_id=${jobId}&limit=30`)).catch(() => null),
+        fetch(apiUrl(`/api/v1/jobs/${jobId}`)).catch(() => null)
       ]);
 
       if (activeJobIdRef.current !== null && activeJobIdRef.current !== jobId) {
@@ -259,7 +364,7 @@ export const WorkbenchView: React.FC = () => {
 
     const pollInterval = setInterval(async () => {
       try {
-        const res = await fetch(`/api/v1/jobs/${activeJobId}`);
+        const res = await fetch(apiUrl(`/api/v1/jobs/${activeJobId}`));
         if (!res.ok) return;
         const job = await res.json();
         if (job.status === 'SUCCEEDED') {
@@ -292,8 +397,7 @@ export const WorkbenchView: React.FC = () => {
     }
 
     lastRenderedFrameIdRef.current = -1;
-    const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
-    const wsUrl = `${proto}://${window.location.host}/api/v1/jobs/${jobId}/stream`;
+    const wsUrl = getWsUrl(`/api/v1/jobs/${jobId}/stream`);
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
     isLiveStreamingRef.current = true;
@@ -339,17 +443,36 @@ export const WorkbenchView: React.FC = () => {
         const renderTracks = tracks.map((t: any) => {
           const bbox = t.bbox ? (t.bbox.x1 !== undefined ? [t.bbox.x1, t.bbox.y1, t.bbox.x2, t.bbox.y2] : t.bbox) : [0, 0, 0, 0];
           let [x1, y1, x2, y2] = bbox;
-          const rw = x2 > x1 ? x2 - x1 : x2;
-          const rh = y2 > y1 ? y2 - y1 : y2;
+          const rx = Math.min(x1, x2);
+          const ry = Math.min(y1, y2);
+          const rw = Math.max(1, Math.abs(x2 - x1));
+          const rh = Math.max(1, Math.abs(y2 - y1));
+          const calibSpeed = t.speed_kmh_calibrated ?? (t.speed_status === 'VALID' ? t.speed_kmh : null);
+          const measState: 'CALIBRATED_SPEED' | 'UNCALIBRATED_MOTION' | 'SPEED_UNAVAILABLE' =
+            t.measurement_state ||
+            (calibSpeed !== null && calibSpeed > 0 ? 'CALIBRATED_SPEED' :
+             (t.speed_status === 'UNCALIBRATED_MOTION' || t.speed_status === 'UNCALIBRATED_ESTIMATE') ? 'UNCALIBRATED_MOTION' :
+             'SPEED_UNAVAILABLE');
+
           return {
             track_id: t.track_id,
             vehicle_class: t.vehicle_class || 'Vehicle',
             confidence: t.confidence || 0,
-            rx: x1, ry: y1, rw, rh,
+            rx, ry, rw, rh,
             speedKmh: t.speed_kmh,
+            speedKmhCalibrated: calibSpeed,
             speedStatus: t.speed_status || 'OUT_OF_ROI',
+            measurementState: measState,
+            motionPxS: t.motion_px_s,
             speedUncertainty: t.speed_uncertainty_kmh,
-            lane: t.lane || 'UNKNOWN'
+            avgSpeedKmh: t.avg_speed_kmh || null,
+            maxSpeedKmh: t.max_speed_kmh || null,
+            minSpeedKmh: t.min_speed_kmh || null,
+            lane: t.lane || 'UNKNOWN',
+            firstFrame: t.first_frame,
+            lastFrame: t.last_frame,
+            detectionCount: t.detection_count || 0,
+            direction: t.direction || 'UNKNOWN'
           };
         });
 
@@ -363,31 +486,26 @@ export const WorkbenchView: React.FC = () => {
           }
         }
 
-        // Frame synchronization without repeated seeking
+        // Frame synchronization without severe playback rate jumps
         if (videoRef.current && videoRef.current.readyState > 1) {
           const vid = videoRef.current;
           const vFps = telemetry?.video_fps || 29.97;
           const vidCurrentFrame = Math.floor(vid.currentTime * vFps);
           const frameLag = vidCurrentFrame - frameIdx;
 
-          if (frameLag > 45) {
+          if (Math.abs(frameLag) > 60) {
             // Severe drift: one-time gentle re-anchor
             vid.currentTime = Math.max(0, frameIdx / vFps);
-          } else if (frameLag > 4) {
-            // Video is ahead of inference stream: slow down smoothly
-            vid.playbackRate = 0.5;
-          } else if (frameLag < -4) {
-            // Video is behind inference stream: speed up smoothly
-            vid.playbackRate = 1.25;
+          } else if (frameLag > 8) {
+            vid.playbackRate = 0.9;
+          } else if (frameLag < -8) {
+            vid.playbackRate = 1.1;
           } else {
-            // In sync
             vid.playbackRate = 1.0;
           }
         }
 
-        if (tracks.length > 0) {
-          setLiveTrackCount(prev => Math.max(prev, tracks.length));
-        }
+        setLiveTrackCount(tracks.length);
 
         if (!firstBoxRenderedRef.current && tracks.length > 0 && uploadStartRef.current > 0) {
           firstBoxRenderedRef.current = true;
@@ -401,6 +519,13 @@ export const WorkbenchView: React.FC = () => {
         const progress = msg.progress || 0;
         setJobProgress(progress);
         const stage = msg.stage || '';
+        if (msg.video_fps) {
+          setTelemetry((prev: any) => ({
+            ...(prev || {}),
+            video_fps: msg.video_fps,
+            total_frames: msg.total_frames || prev?.total_frames
+          }));
+        }
         if (stage === 'DETECTION_AND_TRACKING' || stage === 'STREAMING') {
           setPipelineStage('LIVE_INFERENCE');
           const veh = msg.vehicles_tracked || 0;
@@ -421,6 +546,8 @@ export const WorkbenchView: React.FC = () => {
         isLiveStreamingRef.current = false;
         if (videoRef.current) {
           videoRef.current.playbackRate = 1.0;
+          videoRef.current.loop = true;
+          videoRef.current.play().catch(() => {});
         }
         setWsConnected(false);
         setPipelineStage('FINALIZING');
@@ -447,7 +574,7 @@ export const WorkbenchView: React.FC = () => {
     ws.onerror = () => {
       setWsConnected(false);
       // Immediately check REST API for job completion
-      fetch(`/api/v1/jobs/${jobId}`).then(r => r.json()).then(j => {
+      fetch(apiUrl(`/api/v1/jobs/${jobId}`)).then(r => r.json()).then(j => {
         if (j.status === 'SUCCEEDED') loadJobResults(jobId);
       }).catch(() => {});
     };
@@ -456,7 +583,7 @@ export const WorkbenchView: React.FC = () => {
       setWsConnected(false);
       isLiveStreamingRef.current = false;
       // Check REST API for job completion on WebSocket close
-      fetch(`/api/v1/jobs/${jobId}`).then(r => r.json()).then(j => {
+      fetch(apiUrl(`/api/v1/jobs/${jobId}`)).then(r => r.json()).then(j => {
         if (j.status === 'SUCCEEDED') loadJobResults(jobId);
       }).catch(() => {});
     };
@@ -469,21 +596,68 @@ export const WorkbenchView: React.FC = () => {
   }, []);
 
   // =========================================================================
-  // Synthetic Demo Animation Loop
+  // Playback & Frame Transport Controls
+  // =========================================================================
+  const totalFrames = isRealVideo
+    ? (telemetry?.total_frames || (videoRef.current?.duration ? Math.floor(videoRef.current.duration * (telemetry?.video_fps || 29.97)) : N))
+    : N;
+
+  const handleTogglePlay = () => {
+    const next = !playing;
+    setPlaying(next);
+    if (isRealVideoRef.current && videoRef.current) {
+      if (next) {
+        videoRef.current.play().catch(() => {});
+      } else {
+        videoRef.current.pause();
+      }
+    }
+  };
+
+  const handleStepFrame = (delta: number) => {
+    setPlaying(false);
+    if (isRealVideoRef.current && videoRef.current) {
+      videoRef.current.pause();
+      const vFps = telemetry?.video_fps || 29.97;
+      const targetTime = Math.max(0, (videoRef.current.currentTime || 0) + (delta / vFps));
+      videoRef.current.currentTime = targetTime;
+      setFrame(Math.floor(targetTime * vFps));
+    } else {
+      setFrame(f => Math.max(0, Math.min(N - 1, f + delta)));
+    }
+  };
+
+  const handleSeek = (newFrame: number) => {
+    setFrame(newFrame);
+    seenRef.current.clear();
+    if (isRealVideoRef.current && videoRef.current) {
+      const vFps = telemetry?.video_fps || 29.97;
+      videoRef.current.currentTime = Math.max(0, newFrame / vFps);
+    }
+  };
+
+  // =========================================================================
+  // Synchronized Animation Loop for Video & Synthetic Demo
   // =========================================================================
   useEffect(() => {
     let animId: number;
     let lastTime = 0;
     const loop = (ts: number) => {
-      if (playing && ts - lastTime > 1000 / FPS) {
-        lastTime = ts;
-        setFrame(f => { const next = (f + 1) % N; if (next === 0) seenRef.current.clear(); return next; });
+      if (playing) {
+        if (isRealVideoRef.current && videoRef.current) {
+          const vFps = telemetry?.video_fps || 29.97;
+          const curF = Math.floor((videoRef.current.currentTime || 0) * vFps);
+          setFrame(curF);
+        } else if (ts - lastTime > 1000 / FPS) {
+          lastTime = ts;
+          setFrame(f => { const next = (f + 1) % N; if (next === 0) seenRef.current.clear(); return next; });
+        }
       }
       animId = requestAnimationFrame(loop);
     };
     animId = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(animId);
-  }, [playing]);
+  }, [playing, telemetry]);
 
   // =========================================================================
   // Main Canvas Render — 100% Exact Frame Matching & Scaling (Requirement #9, 11, 12)
@@ -496,7 +670,7 @@ export const WorkbenchView: React.FC = () => {
 
     const t = frame / FPS;
 
-    if (isRealVideoRef.current && videoRef.current && videoRef.current.readyState > 1) {
+    if (isRealVideoRef.current && videoRef.current && (videoRef.current.readyState >= 1 || videoRef.current.videoWidth > 0)) {
       const vidElem = videoRef.current;
 
       // Source resolution (1920x1080 for Traffic1.mp4)
@@ -514,73 +688,111 @@ export const WorkbenchView: React.FC = () => {
 
       // ---------------------------------------------------------------------
       // CALIBRATION OVERLAY (Requirement #9 & #10)
-      // Transform 1920x1080 source image points to 800x450 canvas space
+      // Transform source image points to 800x450 canvas space ONLY if valid calibration exists
       // ---------------------------------------------------------------------
-      const calibPts = realCalib?.image_points_json || [[400, 200], [1500, 200], [1850, 1050], [70, 1050]];
-      const displayPts = calibPts.map(([x, y]: [number, number]) => [x * scaleX, y * scaleY]);
+      if (realCalib?.image_points_json && realCalib.image_points_json.length >= 4) {
+        const calibPts = realCalib.image_points_json;
+        const displayPts = calibPts.map(([x, y]: [number, number]) => [x * scaleX, y * scaleY]);
 
-      cx.strokeStyle = '#3B82F6'; cx.fillStyle = '#3B82F61A'; cx.lineWidth = 1.5;
-      cx.beginPath();
-      displayPts.forEach((p: number[], i: number) => (i ? cx.lineTo(p[0], p[1]) : cx.moveTo(p[0], p[1])));
-      cx.closePath(); cx.fill(); cx.stroke();
+        cx.strokeStyle = '#3B82F6'; cx.fillStyle = '#3B82F61A'; cx.lineWidth = 1.5;
+        cx.beginPath();
+        displayPts.forEach((p: number[], i: number) => (i ? cx.lineTo(p[0], p[1]) : cx.moveTo(p[0], p[1])));
+        cx.closePath(); cx.fill(); cx.stroke();
 
-      displayPts.forEach((p: number[], i: number) => {
-        cx.fillStyle = '#2563EB'; cx.beginPath(); cx.arc(p[0], p[1], 4, 0, 2 * Math.PI); cx.fill();
-        cx.fillStyle = '#FFFFFF'; cx.font = 'bold 9px sans-serif'; cx.textAlign = 'center';
-        cx.fillText('P' + (i + 1), p[0], p[1] + 3);
-      });
+        displayPts.forEach((p: number[], i: number) => {
+          cx.fillStyle = '#2563EB'; cx.beginPath(); cx.arc(p[0], p[1], 4, 0, 2 * Math.PI); cx.fill();
+          cx.fillStyle = '#FFFFFF'; cx.font = 'bold 9px sans-serif'; cx.textAlign = 'center';
+          cx.fillText('P' + (i + 1), p[0], p[1] + 3);
+        });
 
-      // Label on road polygon
-      if (displayPts.length >= 4) {
-        cx.fillStyle = '#2563EBEE'; cx.font = '600 10px sans-serif'; cx.textAlign = 'center';
-        cx.fillText('CALIBRATED ROAD REGION', (displayPts[0][0] + displayPts[1][0]) / 2, displayPts[0][1] + 16);
+        // Label on road polygon
+        if (displayPts.length >= 4) {
+          cx.fillStyle = '#2563EBEE'; cx.font = '600 10px sans-serif'; cx.textAlign = 'center';
+          cx.fillText('CALIBRATED ROAD REGION', (displayPts[0][0] + displayPts[1][0]) / 2, displayPts[0][1] + 16);
+        }
+      } else {
+        cx.fillStyle = '#94A3B8CC'; cx.font = 'bold 11px sans-serif'; cx.textAlign = 'left';
+        cx.fillText('ROAD CALIBRATION NOT CONFIGURED · METRIC SPEED UNAVAILABLE', 16, 26);
       }
 
       // ---------------------------------------------------------------------
-      // REAL Bounding Box Rendering — Frame Sync Contract (±1 Frame Tolerance)
+      // REAL Bounding Box Rendering — Frame Sync Contract (Smooth Multi-Frame Matching)
       // ---------------------------------------------------------------------
+      const findDets = (f: number, map: Map<number, any[]>, tol: number = 4) => {
+        if (map.has(f)) return map.get(f);
+        for (let i = 1; i <= tol; i++) {
+          if (map.has(f - i)) return map.get(f - i);
+          if (map.has(f + i)) return map.get(f + i);
+        }
+        return undefined;
+      };
+
       let currentFrameDets: any[] | undefined;
       if (isLiveStreamingRef.current) {
-        currentFrameDets = rtFrameBufferRef.current.get(currentVidFrame)
-          || rtFrameBufferRef.current.get(currentVidFrame - 1)
-          || rtFrameBufferRef.current.get(currentVidFrame + 1);
-        // Only fallback to latestInferenceFrame if within ±2 frames (prevent ghosting)
-        if (!currentFrameDets && latestInferenceFrame !== null && latestInferenceFrame !== undefined && Math.abs(currentVidFrame - latestInferenceFrame) <= 2) {
-          currentFrameDets = rtFrameBufferRef.current.get(latestInferenceFrame);
+        currentFrameDets = findDets(currentVidFrame, rtFrameBufferRef.current, 3);
+
+        if (!currentFrameDets && latestInferenceFrame !== null && latestInferenceFrame !== undefined) {
+          if (rtFrameBufferRef.current.has(latestInferenceFrame)) {
+            currentFrameDets = rtFrameBufferRef.current.get(latestInferenceFrame);
+          } else {
+            const allKeys = Array.from(rtFrameBufferRef.current.keys());
+            if (allKeys.length > 0) {
+              const closest = allKeys.reduce((prev, curr) => Math.abs(curr - currentVidFrame) < Math.abs(prev - currentVidFrame) ? curr : prev);
+              if (Math.abs(closest - currentVidFrame) <= 15) {
+                currentFrameDets = rtFrameBufferRef.current.get(closest);
+              }
+            }
+          }
         }
       } else {
-        currentFrameDets = frameMapRef.current.get(currentVidFrame)
-          || frameMapRef.current.get(currentVidFrame - 1)
-          || frameMapRef.current.get(currentVidFrame + 1);
+        currentFrameDets = findDets(currentVidFrame, frameMapRef.current, 5);
       }
 
       if (currentFrameDets && currentFrameDets.length > 0) {
         const renderedBadges: { x: number, y: number, w: number, h: number }[] = [];
         currentFrameDets.forEach(det => {
-          const bx = det.rx * scaleX;
-          const by = det.ry * scaleY;
-          const bw = Math.max(16, det.rw * scaleX);
-          const bh = Math.max(14, det.rh * scaleY);
+          const bx = Math.min(det.rx, det.rx + det.rw) * scaleX;
+          const by = Math.min(det.ry, det.ry + det.rh) * scaleY;
+          const bw = Math.max(18, Math.abs(det.rw) * scaleX);
+          const bh = Math.max(16, Math.abs(det.rh) * scaleY);
 
-          const hasValidSpeed = det.speedKmh !== null && det.speedKmh !== undefined && det.speedKmh > 0;
-          const isCalculating = !hasValidSpeed && (
+          const isCalibratedSpeed = det.measurementState === 'CALIBRATED_SPEED' ||
+            (det.speedKmhCalibrated !== null && det.speedKmhCalibrated !== undefined && det.speedKmhCalibrated > 0);
+          const hasValidSpeed = isCalibratedSpeed;
+          const isUncalibratedMotion = det.measurementState === 'UNCALIBRATED_MOTION' ||
+            det.speedStatus === 'UNCALIBRATED_MOTION' || det.speedStatus === 'UNCALIBRATED_ESTIMATE';
+
+          const isCalculating = !hasValidSpeed && !isUncalibratedMotion && (
             det.speedStatus === 'INSUFFICIENT_DATA' ||
             det.speedStatus === 'INSUFFICIENT_HISTORY' ||
             det.speedStatus === 'LOW_CONFIDENCE' ||
             det.speedStatus === 'CALCULATING...'
           );
-          const isCalibReq = !hasValidSpeed && det.speedStatus === 'CALIBRATION_REQUIRED';
-          const isOutOfROI = !hasValidSpeed && det.speedStatus === 'OUT_OF_ROI';
-          const isUnstable = !hasValidSpeed && (det.speedStatus === 'CALIBRATION_UNSTABLE' || det.speedStatus === 'WORLD_COORDINATE_INVALID');
-          const bad = hasValidSpeed && det.speedKmh > speedLimit;
+          const isCalibReq = !hasValidSpeed && !isUncalibratedMotion && det.speedStatus === 'CALIBRATION_REQUIRED';
+          const isOutOfROI = !hasValidSpeed && !isUncalibratedMotion && det.speedStatus === 'OUT_OF_ROI';
+          const isUnstable = !hasValidSpeed && !isUncalibratedMotion && (det.speedStatus === 'CALIBRATION_UNSTABLE' || det.speedStatus === 'WORLD_COORDINATE_INVALID');
 
-          const col = isCalibReq ? '#64748B' : isCalculating ? '#F59E0B' : !hasValidSpeed ? '#94A3B8' : bad ? '#EF4444' : '#10B981';
+          // SPEEDING INTEGRITY: uncalibrated motion cannot trigger a confirmed speeding violation
+          const bad = isCalibratedSpeed && det.speedKmh > speedLimit;
+
+          // Box color:
+          // Red (#EF4444) strictly for confirmed calibrated speeding violations
+          // Green (#10B981) for confirmed calibrated compliant speeds
+          // Cyan (#0EA5E9) for uncalibrated relative motion
+          // Amber (#F59E0B) for calculating
+          // Slate (#64748B / #94A3B8) for calibration required / out of ROI
+          const col = bad ? '#EF4444'
+            : isCalibratedSpeed ? '#10B981'
+            : isUncalibratedMotion ? '#0EA5E9'
+            : isCalibReq ? '#64748B'
+            : isCalculating ? '#F59E0B'
+            : '#94A3B8';
           const isSelected = selTrack === det.track_id;
 
-          cx.fillStyle = isSelected ? '#F59E0B25' : (col + '33');
+          cx.fillStyle = isSelected ? 'rgba(245, 158, 11, 0.22)' : (col + '28');
           cx.fillRect(bx, by, bw, bh);
 
-          const bracketLen = Math.min(10, Math.min(bw, bh) * 0.3);
+          const bracketLen = Math.min(12, Math.min(bw, bh) * 0.35);
           cx.strokeStyle = isSelected ? '#F59E0B' : col; cx.lineWidth = isSelected ? 3 : 2;
           cx.beginPath();
           cx.moveTo(bx, by + bracketLen); cx.lineTo(bx, by); cx.lineTo(bx + bracketLen, by);
@@ -591,28 +803,30 @@ export const WorkbenchView: React.FC = () => {
           cx.strokeStyle = isSelected ? '#F59E0B44' : (col + '44'); cx.lineWidth = 1;
           cx.strokeRect(bx, by, bw, bh);
           cx.fillStyle = isSelected ? '#F59E0B' : col; cx.beginPath();
-          cx.arc(bx + bw / 2, by + bh, 3, 0, 2 * Math.PI); cx.fill();
+          cx.arc(bx + bw / 2, by + bh / 2, 2.5, 0, 2 * Math.PI); cx.fill();
 
-          // HUD Badge — clear semantic status, no N/A
-          const clsLabel = det.vehicle_class || 'Car';
-          let speedLabel = 'CALCULATING...';
-          if (hasValidSpeed) {
+          // HUD Badge — SPEED INTEGRITY COMPLIANT OVERLAY DIRECTLY ON BOUNDING BOX
+          const clsLabel = (det.vehicle_class || 'Vehicle').toUpperCase();
+          let speedLabel = 'Calculating...';
+          if (isCalibratedSpeed) {
             speedLabel = `${Math.round(det.speedKmh)} km/h`;
+          } else if (isUncalibratedMotion) {
+            speedLabel = 'Uncalibrated motion';
           } else if (isCalibReq) {
-            speedLabel = 'CALIBRATION REQUIRED';
+            speedLabel = 'Calib req';
           } else if (isOutOfROI) {
-            speedLabel = 'OUT OF ROI';
+            speedLabel = 'Out of ROI';
           } else if (isUnstable) {
-            speedLabel = 'CALIB UNSTABLE';
+            speedLabel = 'Calib unstable';
           } else if (isCalculating) {
-            speedLabel = 'CALCULATING...';
-          } else if (det.speedStatus) {
-            speedLabel = det.speedStatus;
+            speedLabel = 'Calculating...';
+          } else {
+            speedLabel = 'Speed unavailable';
           }
 
-          const tx = `#${det.track_id} · ${clsLabel} · ${speedLabel}`;
-          cx.font = 'bold 11px sans-serif';
-          const tw = cx.measureText(tx).width + 12;
+          const tx = `${clsLabel} #${det.track_id} | ${speedLabel}`;
+          cx.font = 'bold 11px monospace, sans-serif';
+          const tw = cx.measureText(tx).width + 14;
           const badgeX = Math.max(2, Math.min(W - tw - 2, bx + bw / 2 - tw / 2));
           let badgeY = by >= 25 ? by - 22 : by + bh + 4;
 
@@ -625,22 +839,22 @@ export const WorkbenchView: React.FC = () => {
             }
           }
           badgeY = Math.max(4, Math.min(H - 22, badgeY));
-          renderedBadges.push({ x: badgeX, y: badgeY, w: tw, h: 18 });
+          renderedBadges.push({ x: badgeX, y: badgeY, w: tw, h: 20 });
 
-          cx.fillStyle = '#0F172AEE'; cx.strokeStyle = isSelected ? '#F59E0B' : col; cx.lineWidth = 1.5;
+          cx.fillStyle = '#0B0F19F2'; cx.strokeStyle = isSelected ? '#F59E0B' : col; cx.lineWidth = 1.5;
           cx.beginPath();
-          if ((cx as any).roundRect) (cx as any).roundRect(badgeX, badgeY, tw, 18, 5);
-          else cx.rect(badgeX, badgeY, tw, 18);
+          if ((cx as any).roundRect) (cx as any).roundRect(badgeX, badgeY, tw, 20, 6);
+          else cx.rect(badgeX, badgeY, tw, 20);
           cx.fill(); cx.stroke();
-          cx.fillStyle = isSelected ? '#FBBF24' : (bad ? '#FCA5A5' : isCalculating ? '#FDE68A' : !hasValidSpeed ? '#CBD5E1' : '#6EE7B7');
-          cx.textAlign = 'center'; cx.fillText(tx, badgeX + tw / 2, badgeY + 13);
+          cx.fillStyle = isSelected ? '#FBBF24' : (bad ? '#FCA5A5' : isCalibratedSpeed ? '#6EE7B7' : isUncalibratedMotion ? '#7DD3FC' : isCalculating ? '#FDE68A' : '#CBD5E1');
+          cx.textAlign = 'center'; cx.fillText(tx, badgeX + tw / 2, badgeY + 14);
         });
       }
 
       // LIVE indicator badge (top right corner) — Live AI Telemetry HUD
       if (isLiveStreamingRef.current) {
         const infFrameText = latestInferenceFrame !== null && latestInferenceFrame !== undefined ? `F#${latestInferenceFrame}` : 'F#0';
-        const fpsText = processingFps ? `${processingFps} FPS` : 'LIVE';
+        const fpsText = processingFps ? `${processingFps.toFixed(1)} FPS` : 'LIVE';
         const badge = `● REAL VIDEO — LIVE AI | ${infFrameText} (${fpsText}) | JOB #${activeJobId || 'NONE'}`;
         cx.font = 'bold 10px monospace, sans-serif';
         const bw2 = cx.measureText(badge).width + 16;
@@ -708,7 +922,7 @@ export const WorkbenchView: React.FC = () => {
       cx.fill(); cx.stroke();
       cx.fillStyle = '#FCD34D'; cx.textAlign = 'right'; cx.fillText(demoBadge, W - 14, 22);
     }
-  }, [frame, speedLimit, selTrack, isRealVideo, realTracks, telemetry, realCalib]);
+  }, [frame, speedLimit, selTrack, isRealVideo, realTracks, telemetry, realCalib, latestInferenceFrame, processingFps, activeJobId]);
 
   // =========================================================================
   // Handle File Upload
@@ -725,6 +939,7 @@ export const WorkbenchView: React.FC = () => {
     setRealTracks([]);
     setActiveJobId(null);
     setTelemetry(null);
+    setRealCalib(null); // Clear stale calibration from previous video
     setSelTrack(null);
     setViolations([]);
     setLiveTrackCount(0);
@@ -739,12 +954,13 @@ export const WorkbenchView: React.FC = () => {
     if (wsRef.current) { wsRef.current.close(); wsRef.current = null; }
 
     const blobUrl = URL.createObjectURL(file);
-    const videoElem = document.createElement('video');
-    videoElem.src = blobUrl;
-    videoElem.muted = true;
-    videoElem.loop = true;
-    videoElem.play().catch(() => {});
-    videoRef.current = videoElem;
+    setVideoSrc(blobUrl);
+    if (videoRef.current) {
+      videoRef.current.src = blobUrl;
+      videoRef.current.muted = true;
+      videoRef.current.loop = false; // Do not loop while streaming to maintain monotonic frame sync
+      videoRef.current.play().catch(() => {});
+    }
     setPipelineStage('VIDEO_READY');
     setJobStatusText('Video loaded — Uploading for AI analysis...');
 
@@ -753,16 +969,38 @@ export const WorkbenchView: React.FC = () => {
     formData.append('file', file);
 
     try {
-      const vidRes = await fetch('/api/v1/projects/1/videos', { method: 'POST', body: formData });
+      const vidRes = await fetch(apiUrl('/api/v1/projects/1/videos'), { method: 'POST', body: formData });
       if (!vidRes.ok) throw new Error(`Upload failed: ${vidRes.status}`);
       const vidData = await vidRes.json();
       setPipelineStage('UPLOAD_COMPLETE');
       setJobStatusText('Video uploaded — Triggering CV Detection Job...');
 
-      const jobRes = await fetch(`/api/v1/videos/${vidData.id}/jobs`, {
+      // Authoritative extracted video metadata from backend
+      setTelemetry({
+        source_width: vidData.width || 1920,
+        source_height: vidData.height || 1080,
+        video_fps: vidData.fps || 29.97,
+        video_duration_sec: vidData.duration_sec || 0.0
+      });
+
+      // Check for calibration specifically belonging to this uploaded video
+      let assignedCalib: any = null;
+      try {
+        const calibRes = await fetch(apiUrl(`/api/v1/videos/${vidData.id}/calibrations`));
+        if (calibRes.ok) {
+          const calibData = await calibRes.json();
+          if (calibData?.length) assignedCalib = calibData[0];
+        }
+      } catch (ce) {
+        console.warn('Calibration query error:', ce);
+      }
+      setRealCalib(assignedCalib);
+
+      // Create job strictly referencing assigned calibration for this video (never fallback to demo calibration)
+      const jobRes = await fetch(apiUrl(`/api/v1/videos/${vidData.id}/jobs`), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ calibration_id: realCalib?.id || 1 })
+        body: JSON.stringify({ calibration_id: assignedCalib ? assignedCalib.id : null })
       });
       if (!jobRes.ok) throw new Error(`Job creation failed: ${jobRes.status}`);
       const jobData = await jobRes.json();
@@ -771,12 +1009,6 @@ export const WorkbenchView: React.FC = () => {
       setActiveJobId(jobId);
       setPipelineStage('JOB_CREATED');
       setJobStatusText(`Job #${jobId} created — connecting real-time stream...`);
-
-      const calibRes = await fetch(`/api/v1/videos/${vidData.id}/calibrations`);
-      if (calibRes.ok) {
-        const calibData = await calibRes.json();
-        if (calibData?.length) setRealCalib(calibData[0]);
-      }
 
       connectWebSocket(jobId);
 
@@ -827,6 +1059,249 @@ export const WorkbenchView: React.FC = () => {
       });
       if (hit) { setSelTrack(hit); setPlaying(false); }
     }
+  };
+
+  const formatTimestamp = (frameIdx: number, fps: number = 30) => {
+    const totalSec = frameIdx / (fps || 30);
+    const mins = Math.floor(totalSec / 60);
+    const secs = (totalSec % 60).toFixed(1);
+    return `${mins.toString().padStart(2, '0')}:${secs.padStart(4, '0')}s`;
+  };
+
+  const getLiveDetectionLogs = useCallback(() => {
+    const fps = telemetry?.video_fps || 29.97;
+    const currentVidFrame = videoRef.current
+      ? Math.floor((videoRef.current.currentTime || 0) * fps)
+      : (latestInferenceFrame || 0);
+
+    if (isRealVideo) {
+      if (isLiveStreamingRef.current) {
+        const trackMap = new Map<number, any>();
+        rtFrameBufferRef.current.forEach((dets, fIdx) => {
+          dets.forEach((d: any) => {
+            const existing = trackMap.get(d.track_id);
+            if (!existing || fIdx >= existing.lastSeenFrame) {
+              const isCalibrated = d.measurementState === 'CALIBRATED_SPEED' ||
+                (d.speedKmhCalibrated !== null && d.speedKmhCalibrated !== undefined && d.speedKmhCalibrated > 0);
+              trackMap.set(d.track_id, {
+                ...d,
+                lastSeenFrame: fIdx,
+                timestamp: formatTimestamp(fIdx, fps),
+                inCurrentFrame: Math.abs(fIdx - currentVidFrame) <= 3,
+                isCalibrated
+              });
+            }
+          });
+        });
+
+        return Array.from(trackMap.values()).sort((a, b) => b.lastSeenFrame - a.lastSeenFrame);
+      }
+
+      if (realTracks && realTracks.length > 0) {
+        return realTracks.map((trk: any) => {
+          const validSpeeds = (trk.speed_measurements || [])
+            .filter((s: any) => (s.error_components?.validity === 'VALID' || !s.error_components?.validity) && (s.smoothed_kmh || s.instantaneous_kmh) > 0)
+            .map((s: any) => s.smoothed_kmh ?? s.instantaneous_kmh);
+
+          const currentSm = (trk.speed_measurements || []).find((s: any) => s.frame === currentVidFrame);
+          const hasCurrentValidSm = currentSm && (currentSm.smoothed_kmh || currentSm.instantaneous_kmh) > 0 &&
+            (currentSm.error_components?.validity === 'VALID' || !currentSm.error_components?.validity);
+
+          let speedVal: number | null = hasCurrentValidSm ? (currentSm.smoothed_kmh ?? currentSm.instantaneous_kmh) : null;
+          let measurementState: 'CALIBRATED_SPEED' | 'UNCALIBRATED_MOTION' | 'SPEED_UNAVAILABLE' = 'SPEED_UNAVAILABLE';
+          let speedStatus = 'SPEED_UNAVAILABLE';
+
+          if (speedVal !== null) {
+            measurementState = 'CALIBRATED_SPEED';
+            speedStatus = 'VALID';
+          } else if (realCalib) {
+            if (validSpeeds.length > 0) {
+              speedVal = validSpeeds[validSpeeds.length - 1];
+              measurementState = 'CALIBRATED_SPEED';
+              speedStatus = 'VALID';
+            } else {
+              speedStatus = currentSm?.error_components?.validity || 'OUT_OF_ROI';
+              measurementState = 'SPEED_UNAVAILABLE';
+            }
+          } else if (trk.trajectory && trk.trajectory.length >= 2) {
+            measurementState = 'UNCALIBRATED_MOTION';
+            speedStatus = 'UNCALIBRATED_MOTION';
+          } else {
+            speedStatus = 'CALIBRATION_REQUIRED';
+            measurementState = 'SPEED_UNAVAILABLE';
+          }
+
+          const inCurrentFrame = currentVidFrame >= (trk.first_frame || 0) && currentVidFrame <= (trk.last_frame || 999999);
+
+          return {
+            track_id: trk.track_id,
+            vehicle_class: trk.vehicle_class || 'Vehicle',
+            confidence: trk.confidence || 0.95,
+            speedKmh: speedVal,
+            speedKmhCalibrated: measurementState === 'CALIBRATED_SPEED' ? speedVal : null,
+            measurementState,
+            speedStatus,
+            isCalibrated: measurementState === 'CALIBRATED_SPEED',
+            timestamp: formatTimestamp(trk.first_frame || 0, fps),
+            lastSeenFrame: trk.last_frame || 0,
+            inCurrentFrame
+          };
+        });
+      }
+
+      return [];
+    }
+
+    return V.map(a => {
+      const spd = estSpeed(a, frame);
+      return {
+        track_id: a.id,
+        vehicle_class: a.cls || 'Vehicle',
+        confidence: a.conf || 0.92,
+        speedKmh: spd,
+        speedKmhCalibrated: spd,
+        measurementState: 'CALIBRATED_SPEED',
+        speedStatus: 'VALID',
+        isCalibrated: true,
+        timestamp: formatTimestamp(frame, FPS),
+        lastSeenFrame: frame,
+        inCurrentFrame: true
+      };
+    });
+  }, [telemetry, isRealVideo, latestInferenceFrame, realTracks, realCalib, frame]);
+
+  const renderLiveDetectionLog = () => {
+    const logs = getLiveDetectionLogs();
+    const filteredLogs = logs.filter(l => {
+      if (logFilter === 'speeding') return l.isCalibrated && l.speedKmh !== null && l.speedKmh > speedLimit;
+      if (logFilter === 'active') return l.inCurrentFrame;
+      return true;
+    });
+
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        {/* Filters and Counters */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
+          <div style={{ display: 'flex', gap: 4 }}>
+            {(['all', 'active', 'speeding'] as const).map(f => (
+              <button
+                key={f}
+                className={`tab-pill ${logFilter === f ? 'active' : 'inactive'}`}
+                style={{ fontSize: '10px', padding: '4px 8px' }}
+                onClick={() => setLogFilter(f)}
+              >
+                {f === 'all' ? `ALL (${logs.length})` : f === 'active' ? `LIVE (${logs.filter(x => x.inCurrentFrame).length})` : `SPEEDING (${logs.filter(x => x.isCalibrated && x.speedKmh && x.speedKmh > speedLimit).length})`}
+              </button>
+            ))}
+          </div>
+          {isLiveStreamingRef.current && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: '#10B981', fontWeight: 700 }}>
+              <span className="pulse-dot" /> STREAMING
+            </div>
+          )}
+        </div>
+
+        {/* Live Detection Log Table */}
+        <div className="log-table-container">
+          <table style={{ width: '100%', fontSize: '11px', borderCollapse: 'collapse', color: '#E2E8F0' }}>
+            <thead>
+              <tr style={{ background: '#111827', color: '#94A3B8', textAlign: 'left', borderBottom: '1px solid #1E293B', position: 'sticky', top: 0, zIndex: 1 }}>
+                <th style={{ padding: '8px 6px' }}>VEHICLE</th>
+                <th style={{ padding: '8px 6px' }}>CLASS</th>
+                <th style={{ padding: '8px 6px' }}>SPEED</th>
+                <th style={{ padding: '8px 6px' }}>CONF</th>
+                <th style={{ padding: '8px 6px' }}>TIME</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredLogs.length === 0 ? (
+                <tr>
+                  <td colSpan={5} style={{ textAlign: 'center', padding: '28px 8px', color: '#64748B' }}>
+                    {isLiveStreamingRef.current ? 'Awaiting real-time vehicle detections...' : 'No detections match current filter.'}
+                  </td>
+                </tr>
+              ) : (
+                filteredLogs.map(log => {
+                  const isSelected = selTrack === log.track_id;
+                  const isCalibrated = log.isCalibrated || log.measurementState === 'CALIBRATED_SPEED';
+                  const isSpeeding = isCalibrated && log.speedKmh !== null && log.speedKmh > speedLimit;
+                  const isUncalibrated = log.measurementState === 'UNCALIBRATED_MOTION' ||
+                    log.speedStatus === 'UNCALIBRATED_MOTION' || log.speedStatus === 'UNCALIBRATED_ESTIMATE';
+
+                  let speedDisplay = 'Speed unavailable';
+                  let speedColor = '#94A3B8';
+
+                  if (isCalibrated && log.speedKmh !== null) {
+                    speedDisplay = `${Math.round(log.speedKmh)} km/h`;
+                    speedColor = isSpeeding ? '#EF4444' : '#10B981';
+                  } else if (isUncalibrated) {
+                    speedDisplay = 'Uncalibrated motion';
+                    speedColor = '#0EA5E9';
+                  } else if (log.speedStatus === 'CALIBRATION_REQUIRED') {
+                    speedDisplay = 'No Calib';
+                    speedColor = '#64748B';
+                  } else {
+                    speedDisplay = 'Calc...';
+                    speedColor = '#F59E0B';
+                  }
+
+                  return (
+                    <tr
+                      key={log.track_id}
+                      onClick={() => {
+                        setSelTrack(log.track_id);
+                        setSidebarTab('inspector');
+                      }}
+                      style={{
+                        background: isSelected ? 'rgba(245, 158, 11, 0.2)' : log.inCurrentFrame ? 'rgba(16, 185, 129, 0.08)' : 'transparent',
+                        borderBottom: '1px solid #1E293B',
+                        cursor: 'pointer',
+                        transition: 'background 0.15s'
+                      }}
+                      title="Click to inspect this vehicle track"
+                    >
+                      <td style={{ padding: '8px 6px', fontWeight: 700, color: '#F8FAFC' }}>
+                        {log.inCurrentFrame && <span className="pulse-dot" style={{ width: 6, height: 6, marginRight: 6 }} />}
+                        #{log.track_id}
+                      </td>
+                      <td style={{ padding: '8px 6px' }}>
+                        <span style={{
+                          padding: '2px 6px',
+                          borderRadius: '4px',
+                          fontSize: '10px',
+                          fontWeight: 700,
+                          background: log.vehicle_class === 'Truck' ? '#334155' : log.vehicle_class === 'Motorcycle' ? '#4C1D95' : '#1E293B',
+                          color: '#E0E7FF'
+                        }}>
+                          {log.vehicle_class}
+                        </span>
+                      </td>
+                      <td style={{ padding: '8px 6px', fontWeight: 800, color: speedColor }}>
+                        {speedDisplay}
+                      </td>
+                      <td style={{ padding: '8px 6px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                          <span style={{ fontSize: '10px', color: '#94A3B8' }}>{((log.confidence || 0.9) * 100).toFixed(0)}%</span>
+                          <div style={{ width: 24, height: 4, background: '#1E293B', borderRadius: 2, overflow: 'hidden' }}>
+                            <div style={{ width: `${Math.round((log.confidence || 0.9) * 100)}%`, height: '100%', background: '#4F46E5' }} />
+                          </div>
+                        </div>
+                      </td>
+                      <td style={{ padding: '8px 6px', color: '#64748B', fontFamily: 'monospace' }}>
+                        {log.timestamp}
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
+        <div style={{ fontSize: '11px', color: '#64748B', textAlign: 'center' }}>
+          💡 Click any row to view track telemetry & speed curve
+        </div>
+      </div>
+    );
   };
 
   // =========================================================================
@@ -904,6 +1379,7 @@ export const WorkbenchView: React.FC = () => {
         speedKmh = latestLive.speedKmh || 0;
         uncertaintyKmh = latestLive.speedUncertainty || 0;
         statusStr = latestLive.speedStatus || 'CALCULATING...';
+        if (statusStr === 'CALIBRATION_REQUIRED') statusStr = 'CALIBRATION REQUIRED';
         if (statusStr === 'INSUFFICIENT_DATA' || statusStr === 'INSUFFICIENT_HISTORY') statusStr = 'CALCULATING...';
         hist = allLiveInstances
           .map(item => item.det.speedKmh)
@@ -911,6 +1387,7 @@ export const WorkbenchView: React.FC = () => {
       }
 
       const isBad = speedKmh > speedLimit;
+      const isCalibReq = statusStr === 'CALIBRATION REQUIRED' || statusStr === 'CALIBRATION_REQUIRED';
 
       return (
         <div>
@@ -920,7 +1397,7 @@ export const WorkbenchView: React.FC = () => {
             {speedKmh > 0 ? speedKmh.toFixed(1) : statusStr} {speedKmh > 0 && <small>km/h ± {uncertaintyKmh.toFixed(1)}</small>}
           </div>
           <div className="mu">
-            {speedKmh > 0 ? 'Kalman-Smoothed Monocular Speed Estimation' : statusStr === 'CALIBRATION REQUIRED' ? 'Camera calibration required for speed' : 'Accumulating space-time observations'}
+            {speedKmh > 0 ? 'Kalman-Smoothed Monocular Speed Estimation' : isCalibReq ? 'Camera calibration required for metric speed' : 'Accumulating space-time observations'}
           </div>
           <canvas id="sp" width={300} height={110} style={{ margin: '8px 0' }} ref={node => {
             if (!node) return; const c = node.getContext('2d'); if (!c) return;
@@ -937,7 +1414,7 @@ export const WorkbenchView: React.FC = () => {
               c.fillStyle = '#10B981'; c.fillText(`${speedKmh.toFixed(1)} km/h`, 240, 12);
             } else {
               c.fillStyle = '#94A3B8'; c.font = '11px sans-serif'; c.textAlign = 'center';
-              const notice = statusStr === 'CALIBRATION REQUIRED' ? 'CALIBRATION REQUIRED FOR SPEED' : 'ACCUMULATING SPEED SAMPLES...';
+              const notice = isCalibReq ? 'CALIBRATION REQUIRED FOR METRIC SPEED' : 'ACCUMULATING SPEED SAMPLES...';
               c.fillText(notice, 150, 58);
             }
           }} />
@@ -1008,6 +1485,133 @@ export const WorkbenchView: React.FC = () => {
   };
 
   // =========================================================================
+  // Phase 22: Synchronized Vehicle Intelligence Table Data
+  // =========================================================================
+  const getVehicleTableData = () => {
+    if (isRealVideo) {
+      if (realTracks && realTracks.length > 0) {
+        const currentVidFrame = videoRef.current
+          ? Math.floor((videoRef.current.currentTime || 0) * (telemetry?.video_fps || 29.97))
+          : 0;
+
+        return realTracks.map((trk: any) => {
+          const validSpeeds = (trk.speed_measurements || [])
+            .filter((s: any) => (s.error_components?.validity === 'VALID' || !s.error_components?.validity) && (s.smoothed_kmh || s.instantaneous_kmh) > 0)
+            .map((s: any) => s.smoothed_kmh ?? s.instantaneous_kmh);
+
+          const currentSm = (trk.speed_measurements || []).find((s: any) => s.frame === currentVidFrame);
+          const hasCurrentValidSm = currentSm && (currentSm.smoothed_kmh || currentSm.instantaneous_kmh) > 0 &&
+            (currentSm.error_components?.validity === 'VALID' || !currentSm.error_components?.validity);
+
+          let currentSpeedVal: number | null = hasCurrentValidSm ? (currentSm.smoothed_kmh ?? currentSm.instantaneous_kmh) : null;
+          let measurementState: 'CALIBRATED_SPEED' | 'UNCALIBRATED_MOTION' | 'SPEED_UNAVAILABLE' = 'SPEED_UNAVAILABLE';
+
+          if (currentSpeedVal !== null) {
+            measurementState = 'CALIBRATED_SPEED';
+          } else if (realCalib) {
+            if (validSpeeds.length > 0) {
+              currentSpeedVal = validSpeeds[validSpeeds.length - 1];
+              measurementState = 'CALIBRATED_SPEED';
+            } else {
+              measurementState = 'SPEED_UNAVAILABLE';
+            }
+          } else if (trk.trajectory && trk.trajectory.length >= 2) {
+            measurementState = 'UNCALIBRATED_MOTION';
+          } else {
+            measurementState = 'SPEED_UNAVAILABLE';
+          }
+
+          const isCalibrated = measurementState === 'CALIBRATED_SPEED';
+          const avgSpeed = isCalibrated && validSpeeds.length > 0
+            ? (validSpeeds.reduce((a: number, b: number) => a + b, 0) / validSpeeds.length).toFixed(1) + ' km/h'
+            : '-';
+          const maxSpeed = isCalibrated && validSpeeds.length > 0
+            ? Math.max(...validSpeeds).toFixed(1) + ' km/h'
+            : '-';
+
+          let calibStatus = realCalib ? 'CALIBRATED' : 'UNCALIBRATED';
+          let validity = isCalibrated ? 'CALIBRATED_SPEED' : measurementState === 'UNCALIBRATED_MOTION' ? 'UNCALIBRATED_MOTION' : 'SPEED_UNAVAILABLE';
+          let currentSpeedText = isCalibrated && currentSpeedVal !== null
+            ? `${Math.round(currentSpeedVal)} km/h`
+            : measurementState === 'UNCALIBRATED_MOTION'
+            ? 'Uncalibrated motion'
+            : 'Speed unavailable';
+
+          const isCurrentlyInFrame = currentVidFrame >= (trk.first_frame || 0) && currentVidFrame <= (trk.last_frame || 999999);
+          const trackStatus = isCurrentlyInFrame ? 'IN FRAME' : 'LOGGED';
+
+          return {
+            track_id: trk.track_id,
+            vehicle_class: trk.vehicle_class || 'Vehicle',
+            current_speed: currentSpeedText,
+            current_speed_raw: isCalibrated ? currentSpeedVal : null,
+            isCalibrated,
+            measurement_state: measurementState,
+            avg_speed: avgSpeed,
+            max_speed: maxSpeed,
+            track_status: trackStatus,
+            calibration_status: calibStatus,
+            validity: validity
+          };
+        });
+      }
+
+      if (rtFrameBufferRef.current.size > 0) {
+        const trackMap = new Map<number, any>();
+        rtFrameBufferRef.current.forEach((dets) => {
+          dets.forEach((d: any) => {
+            trackMap.set(d.track_id, d);
+          });
+        });
+
+        return Array.from(trackMap.values()).map((d: any) => {
+          const isCalibrated = d.measurementState === 'CALIBRATED_SPEED' ||
+            (d.speedKmhCalibrated !== null && d.speedKmhCalibrated !== undefined && d.speedKmhCalibrated > 0);
+          const isUncalibrated = d.measurementState === 'UNCALIBRATED_MOTION';
+          const speedDisplay = isCalibrated && d.speedKmh !== null
+            ? `${Math.round(d.speedKmh)} km/h`
+            : isUncalibrated
+            ? 'Uncalibrated motion'
+            : 'Speed unavailable';
+
+          return {
+            track_id: d.track_id,
+            vehicle_class: d.vehicle_class || 'Vehicle',
+            current_speed: speedDisplay,
+            current_speed_raw: isCalibrated ? d.speedKmh : null,
+            isCalibrated,
+            measurement_state: d.measurementState || (isCalibrated ? 'CALIBRATED_SPEED' : isUncalibrated ? 'UNCALIBRATED_MOTION' : 'SPEED_UNAVAILABLE'),
+            avg_speed: isCalibrated && d.avgSpeedKmh ? `${d.avgSpeedKmh.toFixed(1)} km/h` : '-',
+            max_speed: isCalibrated && d.maxSpeedKmh ? `${d.maxSpeedKmh.toFixed(1)} km/h` : '-',
+            track_status: 'ACTIVE',
+            calibration_status: realCalib ? 'CALIBRATED' : 'UNCALIBRATED',
+            validity: isCalibrated ? 'CALIBRATED_SPEED' : isUncalibrated ? 'UNCALIBRATED_MOTION' : 'SPEED_UNAVAILABLE'
+          };
+        });
+      }
+
+      return [];
+    }
+
+    return V.map(a => {
+      const spd = estSpeed(a, frame);
+      return {
+        track_id: a.id,
+        vehicle_class: a.cls || 'Vehicle',
+        current_speed: `${Math.round(spd)} km/h`,
+        current_speed_raw: spd,
+        isCalibrated: true,
+        measurement_state: 'CALIBRATED_SPEED',
+        avg_speed: `${Math.round(a.v0 || 60)} km/h`,
+        max_speed: `${Math.round((a.v0 || 60) * 1.15)} km/h`,
+        track_status: 'SIMULATED',
+        calibration_status: 'SYNTHETIC',
+        validity: 'CALIBRATED_SPEED'
+      };
+    });
+  };
+
+  // =========================================================================
   // JSX Layout
   // =========================================================================
   return (
@@ -1033,6 +1637,46 @@ export const WorkbenchView: React.FC = () => {
             )}
           </h3>
 
+          <video
+            ref={videoRef}
+            src={videoSrc || undefined}
+            playsInline
+            muted
+            preload="auto"
+            onPlay={() => setPlaying(true)}
+            onPause={() => { if (!isLiveStreamingRef.current) setPlaying(false); }}
+            onEnded={() => {
+              if (videoRef.current?.loop) {
+                videoRef.current.currentTime = 0;
+                videoRef.current.play().catch(() => {});
+              }
+            }}
+            onLoadedMetadata={() => {
+              if (videoRef.current && videoRef.current.duration) {
+                const fps = telemetry?.video_fps || 29.97;
+                setTelemetry((prev: any) => ({
+                  ...(prev || {}),
+                  total_frames: prev?.total_frames || Math.floor(videoRef.current!.duration * fps),
+                  video_duration_sec: prev?.video_duration_sec || videoRef.current!.duration
+                }));
+              }
+              videoRef.current?.play().catch(() => {});
+            }}
+            onSeeked={() => {
+              if (canvasRef.current && videoRef.current) {
+                // Re-trigger render on seek
+                setFrame(Math.floor((videoRef.current.currentTime || 0) * (telemetry?.video_fps || 29.97)));
+              }
+            }}
+            style={{
+              position: 'absolute',
+              width: 320,
+              height: 180,
+              opacity: 0.01,
+              pointerEvents: 'none',
+              zIndex: -1
+            }}
+          />
           <canvas ref={canvasRef} width={W} height={H} onClick={handleCanvasClick} style={{ cursor: 'pointer', display: 'block', borderRadius: 6 }} />
 
           {/* Pipeline Progress Status */}
@@ -1065,16 +1709,25 @@ export const WorkbenchView: React.FC = () => {
             {firstDetectionMs && <span>⚡ First detection: <b style={{ color: '#4F46E5' }}>{firstDetectionMs} ms</b></span>}
             {processingFps && <span>🚀 FPS: <b style={{ color: '#0EA5E9' }}>{processingFps.toFixed(1)}</b></span>}
             {realTimeFactor !== null && <span>⏱ RTF: <b style={{ color: realTimeFactor >= 1.0 ? '#10B981' : '#F59E0B' }}>{realTimeFactor.toFixed(2)}x</b></span>}
-            <span>Calibration: <b style={{ color: realCalib ? '#10B981' : '#F59E0B' }}>{realCalib ? `ACTIVE (#${realCalib.id || 1})` : 'NOT CONFIGURED'}</b></span>
+            <span>Calibration: <b style={{ color: realCalib ? '#10B981' : '#F59E0B' }}>{realCalib ? `ACTIVE (#${realCalib.id})` : 'NOT CONFIGURED'}</b></span>
           </div>
 
           {/* Controls */}
           <div className="bar">
-            <button className="b" onClick={() => setPlaying(!playing)}>{playing ? 'Pause' : 'Play'}</button>
-            <button className="b g" onClick={() => { setPlaying(false); setFrame(f => Math.max(0, f - 1)); }}>◀ −1</button>
-            <button className="b g" onClick={() => { setPlaying(false); setFrame(f => Math.min(N - 1, f + 1)); }}>+1 ▶</button>
-            <input type="range" min="0" max={N - 1} value={frame} onChange={e => { setFrame(Number(e.target.value)); seenRef.current.clear(); }} />
-            <span className="mu">{Math.floor((frame / FPS) / 60)}:{((frame / FPS) % 60).toFixed(2).padStart(5, '0')} · f{frame}</span>
+            <button className="b" onClick={handleTogglePlay}>{playing ? 'Pause' : 'Play'}</button>
+            <button className="b g" onClick={() => handleStepFrame(-1)}>◀ −1</button>
+            <button className="b g" onClick={() => handleStepFrame(1)}>+1 ▶</button>
+            <input
+              type="range"
+              min="0"
+              max={Math.max(1, totalFrames - 1)}
+              value={Math.min(frame, Math.max(1, totalFrames - 1))}
+              onChange={e => handleSeek(Number(e.target.value))}
+            />
+            <span className="mu">
+              {Math.floor((frame / (isRealVideo ? (telemetry?.video_fps || 29.97) : FPS)) / 60)}:
+              {((frame / (isRealVideo ? (telemetry?.video_fps || 29.97) : FPS)) % 60).toFixed(2).padStart(5, '0')} · f{frame} / {totalFrames}
+            </span>
           </div>
 
           <div className="bar">
@@ -1143,12 +1796,145 @@ export const WorkbenchView: React.FC = () => {
             </table>
           </div>
         </div>
+        {/* Phase 22: Synchronized Vehicle Speed Intelligence Table */}
+        <div className="card" style={{ marginTop: '16px' }}>
+          <h3 style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span>Vehicle Speed Intelligence</span>
+            <span className="badge" style={{ background: '#0F172A', color: '#10B981', fontWeight: 700 }}>
+              {getVehicleTableData().length} VEHICLES LOGGED
+            </span>
+          </h3>
+
+          <div style={{ maxHeight: '280px', overflowY: 'auto', marginTop: '10px' }}>
+            <table style={{ width: '100%', fontSize: '12px', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr style={{ borderBottom: '1px solid #E2E8F0', color: '#64748B', textAlign: 'left', height: '32px' }}>
+                  <th style={{ padding: '6px 8px' }}>TRACK ID</th>
+                  <th style={{ padding: '6px 8px' }}>CLASS</th>
+                  <th style={{ padding: '6px 8px' }}>CURRENT SPEED</th>
+                  <th style={{ padding: '6px 8px' }}>AVG SPEED</th>
+                  <th style={{ padding: '6px 8px' }}>MAX SPEED</th>
+                  <th style={{ padding: '6px 8px' }}>TRACK STATUS</th>
+                  <th style={{ padding: '6px 8px' }}>CALIBRATION</th>
+                  <th style={{ padding: '6px 8px' }}>VALIDITY</th>
+                  <th style={{ padding: '6px 8px', textAlign: 'right' }}>ACTION</th>
+                </tr>
+              </thead>
+              <tbody>
+                {getVehicleTableData().length === 0 ? (
+                  <tr>
+                    <td colSpan={9} style={{ textAlign: 'center', padding: '24px', color: '#94A3B8' }}>
+                      No tracked vehicles active in current scene.
+                    </td>
+                  </tr>
+                ) : (
+                  getVehicleTableData().map((row: any) => {
+                    const isSelected = selTrack === row.track_id;
+                    const hasValidSpeed = row.isCalibrated && row.current_speed_raw !== null && row.current_speed_raw > 0;
+                    const isSpeeding = hasValidSpeed && row.current_speed_raw > speedLimit;
+                    const isUncalibrated = row.measurement_state === 'UNCALIBRATED_MOTION';
+
+                    return (
+                      <tr
+                        key={row.track_id}
+                        onClick={() => { setSelTrack(row.track_id); setPlaying(false); }}
+                        style={{
+                          borderBottom: '1px solid #F1F5F9',
+                          background: isSelected ? '#FEF3C7' : 'transparent',
+                          cursor: 'pointer',
+                          transition: 'background 0.15s'
+                        }}
+                      >
+                        <td style={{ padding: '8px', fontWeight: 700, color: '#1E293B' }}>
+                          #{row.track_id}
+                        </td>
+                        <td style={{ padding: '8px' }}>
+                          <span className="badge" style={{ fontSize: '10px' }}>{row.vehicle_class}</span>
+                        </td>
+                        <td style={{
+                          padding: '8px',
+                          fontWeight: 700,
+                          color: isSpeeding ? '#EF4444' : hasValidSpeed ? '#10B981' : isUncalibrated ? '#0EA5E9' : '#64748B'
+                        }}>
+                          {row.current_speed}
+                        </td>
+                        <td style={{ padding: '8px', color: '#334155' }}>
+                          {row.avg_speed}
+                        </td>
+                        <td style={{ padding: '8px', color: '#334155' }}>
+                          {row.max_speed}
+                        </td>
+                        <td style={{ padding: '8px' }}>
+                          <span style={{
+                            fontSize: '10px',
+                            fontWeight: 700,
+                            padding: '2px 6px',
+                            borderRadius: '4px',
+                            background: row.track_status === 'ACTIVE' || row.track_status === 'IN FRAME' ? '#DCFCE7' : '#F1F5F9',
+                            color: row.track_status === 'ACTIVE' || row.track_status === 'IN FRAME' ? '#166534' : '#475569'
+                          }}>
+                            {row.track_status}
+                          </span>
+                        </td>
+                        <td style={{ padding: '8px' }}>
+                          <span style={{
+                            fontSize: '10px',
+                            fontWeight: 600,
+                            color: row.calibration_status === 'CALIBRATED' || row.calibration_status === 'SYNTHETIC' ? '#2563EB' : '#D97706'
+                          }}>
+                            {row.calibration_status}
+                          </span>
+                        </td>
+                        <td style={{ padding: '8px' }}>
+                          <span style={{
+                            fontSize: '10px',
+                            fontWeight: 600,
+                            color: row.measurement_state === 'CALIBRATED_SPEED' ? '#10B981' : row.measurement_state === 'UNCALIBRATED_MOTION' ? '#0EA5E9' : '#D97706'
+                          }}>
+                            {row.validity}
+                          </span>
+                        </td>
+                        <td style={{ padding: '8px', textAlign: 'right' }}>
+                          <button
+                            className="b g"
+                            style={{ padding: '2px 8px', fontSize: '11px' }}
+                            onClick={(ev) => {
+                              ev.stopPropagation();
+                              setSelTrack(row.track_id);
+                              setPlaying(false);
+                            }}
+                          >
+                            Inspect
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
       </div>
 
       <div>
-        <div className="card">
-          <h3>Track Inspector</h3>
-          {renderInspector()}
+        <div className="card" style={{ background: '#0F172A', border: '1px solid #1E293B', color: '#F8FAFC' }}>
+          <div style={{ display: 'flex', gap: 6, marginBottom: 12, borderBottom: '1px solid #1E293B', paddingBottom: 8 }}>
+            <button
+              className={`tab-pill ${sidebarTab === 'log' ? 'active' : 'inactive'}`}
+              onClick={() => setSidebarTab('log')}
+            >
+              LIVE DETECTION LOG
+            </button>
+            <button
+              className={`tab-pill ${sidebarTab === 'inspector' ? 'active' : 'inactive'}`}
+              onClick={() => setSidebarTab('inspector')}
+            >
+              TRACK INSPECTOR {selTrack !== null && `(#${selTrack})`}
+            </button>
+          </div>
+          {sidebarTab === 'log' ? renderLiveDetectionLog() : renderInspector()}
         </div>
       </div>
     </div>

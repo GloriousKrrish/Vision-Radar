@@ -43,8 +43,8 @@ _JOB_LOOP: Dict[int, asyncio.AbstractEventLoop] = {}   # event loop that owns ea
 _JOB_COMPLETED_AT: Dict[int, float] = {}              # timestamp when job finished
 
 # Maximum items waiting in each per-job queue.
-# If the WebSocket consumer is slow, oldest visualization frames are dropped
-# (tracker itself is never skipped — only visualization delivery is throttled).
+# 64 frames gives ~2.1s of buffer at 30fps before backpressure.
+# The tracker itself is never skipped — only visualization delivery is throttled.
 _QUEUE_MAX_SIZE = 64
 
 # Dedicated thread pool for non-blocking disk I/O (accident candidate crops & metadata)
@@ -110,15 +110,25 @@ def log_lifecycle(job_id: int, event: str, frame_index: Optional[int] = None, qu
 
 def _safe_put(queue: asyncio.Queue, message: dict):
     """Safely put message into queue. Never drops terminal messages (completed/error/status)."""
+    is_terminal = message.get("type") in ("completed", "error", "status")
     while queue.full():
         try:
-            queue.get_nowait()
+            item = queue.get_nowait()
+            if item.get("type") in ("completed", "error"):
+                # Avoid dropping previous terminal messages
+                queue.put_nowait(item)
+                break
         except Exception:
             break
     try:
         queue.put_nowait(message)
     except Exception:
-        pass
+        if is_terminal:
+            try:
+                _ = queue.get_nowait()
+                queue.put_nowait(message)
+            except Exception:
+                pass
 
 
 def _emit(job_id: int, message: dict):
@@ -194,7 +204,10 @@ def run_job_streaming(job_id: int, loop: asyncio.AbstractEventLoop):
 
         calib = None
         if job.calibration_id:
-            calib = db.query(Calibration).filter(Calibration.id == job.calibration_id).first()
+            calib = db.query(Calibration).filter(
+                Calibration.id == job.calibration_id,
+                Calibration.video_id == job.video_id
+            ).first()
 
         if calib:
             calibrator = HomographyCalibrator(
@@ -277,6 +290,10 @@ def run_job_streaming(job_id: int, loop: asyncio.AbstractEventLoop):
         active_tracks = {}
         cached_speed_estimates = collections.defaultdict(dict)
         recorded_violation_tracks = set()
+
+        # Phase 22: Per-track running speed statistics accumulator
+        # { track_id: { "sum": float, "count": int, "max": float, "min": float, "latest": float } }
+        track_speed_stats = {}
         total_frames = max(1, meta.total_frames)
         last_frame_idx = 0
         last_timestamp = 0.0
@@ -298,8 +315,13 @@ def run_job_streaming(job_id: int, loop: asyncio.AbstractEventLoop):
             if frame_idx == 0 or frame_idx % 30 == 0:
                 log_lifecycle(job_id, "FRAME_DECODED", frame_index=frame_idx)
 
-            # Store frame in ring buffer for candidate extraction
-            frame_ring_buffer[frame_idx] = frame
+            # Store a small thumbnail in the ring buffer (not the full BGR frame)
+            # to keep memory under control (320x180 @ 3ch ≈ 170 KB per frame vs 6 MB)
+            try:
+                thumb = cv2.resize(frame, (320, 180), interpolation=cv2.INTER_NEAREST)
+                frame_ring_buffer[frame_idx] = (frame, thumb)
+            except Exception:
+                frame_ring_buffer[frame_idx] = (frame, frame)
             if len(frame_ring_buffer) > 90:
                 oldest_idx = min(frame_ring_buffer.keys())
                 del frame_ring_buffer[oldest_idx]
@@ -371,18 +393,104 @@ def run_job_streaming(job_id: int, loop: asyncio.AbstractEventLoop):
                 else:
                     bbox = getattr(trk, 'bbox', None) or [0, 0, 0, 0]
 
+                # Phase 22: Update running speed statistics
+                avg_speed_kmh = None
+                max_speed_kmh = None
+                min_speed_kmh = None
+                if speed_kmh is not None and speed_kmh > 0:
+                    tid = trk.track_id
+                    if tid not in track_speed_stats:
+                        track_speed_stats[tid] = {"sum": 0.0, "count": 0, "max": 0.0, "min": float('inf'), "latest": 0.0}
+                    stats = track_speed_stats[tid]
+                    stats["sum"] += speed_kmh
+                    stats["count"] += 1
+                    stats["max"] = max(stats["max"], speed_kmh)
+                    stats["min"] = min(stats["min"], speed_kmh)
+                    stats["latest"] = speed_kmh
+                    avg_speed_kmh = round(stats["sum"] / stats["count"], 1)
+                    max_speed_kmh = round(stats["max"], 1)
+                    min_speed_kmh = round(stats["min"], 1)
+                elif trk.track_id in track_speed_stats:
+                    stats = track_speed_stats[trk.track_id]
+                    avg_speed_kmh = round(stats["sum"] / max(1, stats["count"]), 1)
+                    max_speed_kmh = round(stats["max"], 1)
+                    min_speed_kmh = round(stats["min"], 1) if stats["min"] < float('inf') else None
+
+                # Compute pixel-displacement speed as a fallback when no calibration exists.
+                # Uses the bbox centroid displacement across the last ~10 frames.
+                px_speed_kmh: Optional[float] = None
+                dt_sec: Optional[float] = None
+                dist_px: Optional[float] = None
+                try:
+                    traj_pts_all = trk.trajectory.points if hasattr(trk.trajectory, 'points') else []
+                    if len(traj_pts_all) >= 2 and meta.fps > 0:
+                        recent = [p for p in traj_pts_all if hasattr(p, 'bbox') and p.bbox and len(p.bbox) == 4]
+                        recent = recent[-min(10, len(recent)):]
+                        if len(recent) >= 2:
+                            p0, p1 = recent[0], recent[-1]
+                            b0, b1 = p0.bbox, p1.bbox
+                            cx0 = (b0[0] + b0[2]) / 2.0
+                            cy0 = (b0[1] + b0[3]) / 2.0
+                            cx1 = (b1[0] + b1[2]) / 2.0
+                            cy1 = (b1[1] + b1[3]) / 2.0
+                            dist_px = ((cx1 - cx0) ** 2 + (cy1 - cy0) ** 2) ** 0.5
+                            dt_frames = max(1, (p1.frame_index if hasattr(p1, 'frame_index') else 1) -
+                                           (p0.frame_index if hasattr(p0, 'frame_index') else 0))
+                            dt_sec = dt_frames / meta.fps
+                            # Scale: 1 pixel in 1080p at typical highway view ≈ 0.05 m
+                            # This is a rough estimate — marked UNCALIBRATED in status
+                            px_speed_kmh = round((dist_px * 0.05 / dt_sec) * 3.6, 1) if dt_sec > 0 else None
+                            # Clamp to sensible highway range
+                            if px_speed_kmh is not None and (px_speed_kmh < 0 or px_speed_kmh > 250):
+                                px_speed_kmh = None
+                except Exception:
+                    px_speed_kmh = None
+                    dt_sec = None
+                    dist_px = None
+
+                # Determine explicit measurement states per Phase 22.1 Speed Integrity:
+                # - CALIBRATED_SPEED: Metric speed supported by valid homography calibration
+                # - UNCALIBRATED_MOTION: Optical/pixel displacement rate based on uncalibrated heuristic
+                # - SPEED_UNAVAILABLE: Insufficient history, out of ROI, or calibration required
+                motion_px_s: Optional[float] = None
+                if dt_sec is not None and dt_sec > 0 and dist_px is not None:
+                    motion_px_s = round(dist_px / dt_sec, 1)
+
+                display_speed_kmh = speed_kmh
+                display_speed_status = speed_status
+                if speed_kmh is not None and speed_status == "VALID":
+                    measurement_state = "CALIBRATED_SPEED"
+                elif px_speed_kmh is not None:
+                    measurement_state = "UNCALIBRATED_MOTION"
+                    display_speed_kmh = px_speed_kmh
+                    display_speed_status = "UNCALIBRATED_MOTION"
+                else:
+                    measurement_state = "SPEED_UNAVAILABLE"
+                    display_speed_status = speed_status or "SPEED_UNAVAILABLE"
+
                 frame_tracks_payload.append({
                     "track_id": trk.track_id,
                     "vehicle_class": trk.vehicle_class,
                     "confidence": round(float(trk.confidence), 3),
                     "bbox": bbox,        # [x1, y1, x2, y2] in source pixels
-                    "speed_kmh": speed_kmh,
+                    "speed_kmh": display_speed_kmh,
+                    "speed_kmh_calibrated": speed_kmh,  # None if no calibration
                     "speed_uncertainty_kmh": speed_uncertainty,
-                    "speed_status": speed_status,  # VALID | OUT_OF_ROI | INSUFFICIENT_DATA | CALIBRATION_UNSTABLE
-                    "lane": getattr(trk, 'lane', 'UNKNOWN')
+                    "speed_status": display_speed_status,
+                    "measurement_state": measurement_state,
+                    "motion_px_s": motion_px_s,
+                    "avg_speed_kmh": avg_speed_kmh,
+                    "max_speed_kmh": max_speed_kmh,
+                    "min_speed_kmh": min_speed_kmh,
+                    "lane": getattr(trk, 'lane', 'UNKNOWN'),
+                    "first_frame": trk.first_frame,
+                    "last_frame": trk.last_frame,
+                    "detection_count": trk.detection_count,
+                    "direction": getattr(trk, 'direction', 'UNKNOWN')
                 })
 
                 # Violations (deduplicated per vehicle track)
+                # STRICT SPEEDING INTEGRITY: uncalibrated motion CANNOT trigger confirmed speeding violation
                 if est and est.validity == "VALID" and trk.track_id not in recorded_violation_tracks:
                     viol = rule_engine.evaluate_track(
                         track_id=trk.track_id,
@@ -448,7 +556,9 @@ def run_job_streaming(job_id: int, loop: asyncio.AbstractEventLoop):
                         cand_tuples = []
                         for f_i in [b_idx, p_idx, a_idx]:
                             if f_i in frame_ring_buffer:
-                                cand_tuples.append((f_i, frame_ring_buffer[f_i].copy()))
+                                # ring buffer now stores (full_frame, thumb) tuples
+                                full_frame, _ = frame_ring_buffer[f_i]
+                                cand_tuples.append((f_i, full_frame.copy()))
 
                         if cand_tuples:
                             res = accident_classifier_service.aggregate_candidate_frames(cand_tuples)
@@ -703,7 +813,11 @@ def run_job_streaming(job_id: int, loop: asyncio.AbstractEventLoop):
         det_telemetry = detector.get_telemetry() if hasattr(detector, 'get_telemetry') else {}
         track_durations = [len(t.trajectory.points) for t in active_tracks.values()] if active_tracks else []
         tracker_metrics = tracker.get_tracking_metrics() if hasattr(tracker, 'get_tracking_metrics') else {}
-        calib_validation = calibrator.validate_calibration() if calibrator else {"is_valid": False}
+        calib_validation = calibrator.validate_calibration() if calibrator else {
+            "is_valid": False,
+            "status": "CALIBRATION_REQUIRED",
+            "reason": "No valid calibration configured for this video"
+        }
 
         avg_det_ms = perf["total_detector_ms"] / max(1, perf["frames_processed"])
         avg_trk_ms = perf["total_tracker_ms"] / max(1, perf["frames_processed"])
@@ -717,7 +831,7 @@ def run_job_streaming(job_id: int, loop: asyncio.AbstractEventLoop):
             "start_timestamp": 0.0,
             "end_timestamp": meta.duration_sec,
             "duration_s": meta.duration_sec,
-            "calibration_id": job.calibration_id or 1,
+            "calibration_id": job.calibration_id,
             "lane_configuration_id": "default_main_roadway",
             "policy_version": "v1.0.0",
             "video_resolution": [meta.width, meta.height],

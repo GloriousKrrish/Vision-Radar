@@ -14,14 +14,22 @@ if packages_dir not in sys.path:
 existing_pythonpath = os.environ.get("PYTHONPATH", "")
 os.environ["PYTHONPATH"] = f"{root_dir};{packages_dir};{existing_pythonpath}"
 
+import argparse
+
 def main():
+    parser = argparse.ArgumentParser(description="VisionRadar Backend Server")
+    parser.add_argument("--port", type=int, default=int(os.environ.get("PORT", 8000)), help="Port to run server on")
+    parser.add_argument("--host", type=str, default="0.0.0.0", help="Host to bind server")
+    parser.add_argument("--reload", action="store_true", help="Enable auto-reload")
+    args = parser.parse_args()
+
     print("==================================================")
     print("   VISIONRADAR — TRAFFIC INTELLIGENCE PLATFORM   ")
     print("==================================================")
-    print("Starting FastAPI Backend Server on http://localhost:8000...")
-    print("Open API Docs available at: http://localhost:8000/docs")
+    print(f"Starting FastAPI Backend Server on http://localhost:{args.port}...")
+    print(f"Open API Docs available at: http://localhost:{args.port}/docs")
 
-    uvicorn.run("apps.api.main:app", host="0.0.0.0", port=8000, reload=False)
+    uvicorn.run("apps.api.main:app", host=args.host, port=args.port, reload=args.reload)
 
 if __name__ == "__main__":
     main()

@@ -34,7 +34,8 @@ class YOLOXDetector(BaseDetector):
         confidence_threshold: float = 0.25,
         nms_threshold: float = 0.45,
         input_size: Tuple[int, int] = (640, 640),
-        device: str = "CPU"
+        device: str = "CPU",
+        class_specific_nms: bool = True
     ):
         self.detector_requested = "YOLOX-Nano-ONNX"
         self.detector_actual = "YOLOX-Nano-ONNX"
@@ -43,6 +44,7 @@ class YOLOXDetector(BaseDetector):
         self.nms_threshold = nms_threshold
         self.input_size = input_size
         self.device = device
+        self.class_specific_nms = class_specific_nms
         self.net = None
         self.ort_session = None
         self.ort_input_name = None
@@ -208,6 +210,7 @@ class YOLOXDetector(BaseDetector):
 
             cand_indices = np.where(total_scores >= conf_thresh)[0]
             boxes, confidences, final_class_ids = [], [], []
+            float_boxes = []
 
             if len(cand_indices) > 0:
                 if preds.shape[0] == len(self.grids):
@@ -233,21 +236,38 @@ class YOLOXDetector(BaseDetector):
                         bw_s = b_w / scale
                         bh_s = b_h / scale
                         boxes.append([int(x1), int(y1), int(bw_s), int(bh_s)])
+                        float_boxes.append([x1, y1, bw_s, bh_s])
                         confidences.append(float(total_scores[idx]))
                         final_class_ids.append(cid)
 
-            indices = cv2.dnn.NMSBoxes(boxes, confidences, conf_thresh, self.nms_threshold)
+            if self.class_specific_nms and len(boxes) > 0:
+                # Per-class NMS to prevent cross-class suppression (e.g. cars suppressing motorcycles or trucks)
+                selected_indices = []
+                unique_cids = set(final_class_ids)
+                for u_cid in unique_cids:
+                    cls_idxs = [j for j, c in enumerate(final_class_ids) if c == u_cid]
+                    cls_boxes = [boxes[j] for j in cls_idxs]
+                    cls_confs = [confidences[j] for j in cls_idxs]
+                    nms_res = cv2.dnn.NMSBoxes(cls_boxes, cls_confs, conf_thresh, self.nms_threshold)
+                    if len(nms_res) > 0:
+                        for s in nms_res.flatten():
+                            selected_indices.append(cls_idxs[s])
+                indices = np.array(selected_indices)
+            else:
+                indices = cv2.dnn.NMSBoxes(boxes, confidences, conf_thresh, self.nms_threshold) if len(boxes) > 0 else []
+
             post_nms_count = len(indices) if len(indices) > 0 else 0
 
             if len(indices) > 0:
                 for idx in indices.flatten():
-                    bx, by, bw_i, bh_i = boxes[idx]
+                    fb = float_boxes[idx]
+                    bx, by, bw_i, bh_i = fb[0], fb[1], fb[2], fb[3]
                     cid = final_class_ids[idx]
                     detections.append(Detection(
                         class_id=cid,
                         class_name=COCO_VEHICLE_CLASSES.get(cid, "Car"),
                         confidence=confidences[idx],
-                        bbox=(float(max(0, bx)), float(max(0, by)), float(min(w, bx + bw_i)), float(min(h, by + bh_i)))
+                        bbox=(float(max(0.0, bx)), float(max(0.0, by)), float(min(float(w), bx + bw_i)), float(min(float(h), by + bh_i)))
                     ))
 
             t1 = time.perf_counter()
@@ -352,6 +372,7 @@ class YOLOXDetector(BaseDetector):
 
         cand_indices = np.where(total_scores >= conf_thresh)[0]
         boxes, confidences, final_class_ids = [], [], []
+        float_boxes = []
 
         for idx in cand_indices:
             cid = int(class_ids[idx])
@@ -360,23 +381,41 @@ class YOLOXDetector(BaseDetector):
                 b_w, b_h = float(bw[idx]), float(bh[idx])
                 x1 = (c_x - pad_left - b_w / 2.0) / scale
                 y1 = (c_y - pad_top - b_h / 2.0) / scale
-                boxes.append([int(x1), int(y1), int(b_w / scale), int(b_h / scale)])
+                bw_s = b_w / scale
+                bh_s = b_h / scale
+                boxes.append([int(x1), int(y1), int(bw_s), int(bh_s)])
+                float_boxes.append([x1, y1, bw_s, bh_s])
                 confidences.append(float(total_scores[idx]))
                 final_class_ids.append(cid)
 
-        indices = cv2.dnn.NMSBoxes(boxes, confidences, conf_thresh, self.nms_threshold)
+        if self.class_specific_nms and len(boxes) > 0:
+            selected_indices = []
+            unique_cids = set(final_class_ids)
+            for u_cid in unique_cids:
+                cls_idxs = [j for j, c in enumerate(final_class_ids) if c == u_cid]
+                cls_boxes = [boxes[j] for j in cls_idxs]
+                cls_confs = [confidences[j] for j in cls_idxs]
+                nms_res = cv2.dnn.NMSBoxes(cls_boxes, cls_confs, conf_thresh, self.nms_threshold)
+                if len(nms_res) > 0:
+                    for s in nms_res.flatten():
+                        selected_indices.append(cls_idxs[s])
+            indices = np.array(selected_indices)
+        else:
+            indices = cv2.dnn.NMSBoxes(boxes, confidences, conf_thresh, self.nms_threshold) if len(boxes) > 0 else []
+
         post_nms_dets = []
         vehicle_dets = []
 
         if len(indices) > 0:
             for idx in indices.flatten():
-                bx, by, bw_i, bh_i = boxes[idx]
+                fb = float_boxes[idx]
+                bx, by, bw_i, bh_i = fb[0], fb[1], fb[2], fb[3]
                 cid = final_class_ids[idx]
                 det = Detection(
                     class_id=cid,
                     class_name=COCO_VEHICLE_CLASSES.get(cid, "Car"),
                     confidence=confidences[idx],
-                    bbox=(float(max(0, bx)), float(max(0, by)), float(min(w, bx + bw_i)), float(min(h, by + bh_i)))
+                    bbox=(float(max(0.0, bx)), float(max(0.0, by)), float(min(float(w), bx + bw_i)), float(min(float(h), by + bh_i)))
                 )
                 post_nms_dets.append(det)
                 vehicle_dets.append(det)
@@ -399,6 +438,7 @@ class YOLOXDetector(BaseDetector):
             "backend": self.backend_name,
             "inference_backend": self.backend_name,
             "input_resolution": list(self.input_size),
+            "class_specific_nms": self.class_specific_nms,
             "inference_time_ms": round(self.last_inference_ms, 2),
             "avg_inference_time_ms": round(avg_ms, 2),
             "raw_detection_count": self.total_raw_detections,

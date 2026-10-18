@@ -1,0 +1,75 @@
+{
+  "model_baseline": "YOLOX-Nano-ONNX",
+  "model_path": "data/models/yolox_nano.onnx",
+  "model_sha256": "c789161ed43c8269fcd4e67c67eeeb4e80c622da2eb296a20bc6007bd18a0b7d",
+  "confidence_thresholds": [
+    0.15,
+    0.2,
+    0.25,
+    0.35,
+    0.45
+  ],
+  "nms_threshold": 0.45,
+  "iou_thresholds": [
+    0.5,
+    0.55,
+    0.6,
+    0.65,
+    0.7,
+    0.75,
+    0.8,
+    0.85,
+    0.9,
+    0.95
+  ],
+  "classes": [
+    "car",
+    "bus",
+    "truck",
+    "motorcycle"
+  ],
+  "configurations": [
+    {
+      "profile": "baseline",
+      "input_size": [
+        640,
+        640
+      ],
+      "class_specific_nms": false
+    },
+    {
+      "profile": "improved_native_416",
+      "input_size": [
+        416,
+        416
+      ],
+      "class_specific_nms": true
+    },
+    {
+      "profile": "improved_highres_640",
+      "input_size": [
+        640,
+        640
+      ],
+      "class_specific_nms": true
+    }
+  ],
+  "evaluated_datasets": [
+    {
+      "name": "vehicle-detection-project test",
+      "samples": 80
+    },
+    {
+      "name": "vehicle-detection-project val",
+      "samples": 80
+    },
+    {
+      "name": "training/training (dense traffic)",
+      "samples": 117
+    },
+    {
+      "name": "AICC22-Custom (video sequence)",
+      "samples": 200
+    }
+  ]
+}

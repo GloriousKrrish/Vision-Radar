@@ -8,7 +8,7 @@ import threading
 from typing import List, Optional
 from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Request, Header, status, BackgroundTasks, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, FileResponse, JSONResponse
+from fastapi.responses import StreamingResponse, FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 
@@ -76,7 +76,7 @@ app.include_router(research_router)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -202,18 +202,26 @@ async def upload_video(project_id: int, file: UploadFile = File(...), db: Sessio
 @app.get("/api/v1/videos/{video_id}", response_model=VideoResponse)
 def get_video(video_id: int, db: Session = Depends(get_db)):
     video = db.query(Video).filter(Video.id == video_id).first()
-    if not video:
+    if not video or not os.path.exists(video.storage_path):
         raise HTTPException(status_code=404, detail="Video not found")
     return video
 
 # --- HTTP 206 Partial Content Video Streaming ---
-@app.get("/api/v1/videos/{video_id}/stream")
-def stream_video(video_id: int, range: Optional[str] = Header(None), db: Session = Depends(get_db)):
+@app.api_route("/api/v1/videos/{video_id}/stream", methods=["GET", "HEAD"])
+def stream_video(video_id: int, request: Request, range: Optional[str] = Header(None), db: Session = Depends(get_db)):
     video = db.query(Video).filter(Video.id == video_id).first()
     if not video or not os.path.exists(video.storage_path):
         raise HTTPException(status_code=404, detail="Video file not found")
 
     file_size = os.path.getsize(video.storage_path)
+    if request.method == "HEAD":
+        headers = {
+            'Accept-Ranges': 'bytes',
+            'Content-Length': str(file_size),
+            'Content-Type': 'video/mp4',
+        }
+        return Response(status_code=200, headers=headers)
+
     if range is None:
         return FileResponse(video.storage_path, media_type="video/mp4")
 
@@ -223,10 +231,18 @@ def stream_video(video_id: int, range: Optional[str] = Header(None), db: Session
     end = int(end_str) if end_str else file_size - 1
     chunk_size = (end - start) + 1
 
+    CHUNK = 128 * 1024
     def send_bytes():
         with open(video.storage_path, "rb") as f:
             f.seek(start)
-            yield f.read(chunk_size)
+            remaining = chunk_size
+            while remaining > 0:
+                read_len = min(remaining, CHUNK)
+                data = f.read(read_len)
+                if not data:
+                    break
+                remaining -= len(data)
+                yield data
 
     headers = {
         'Content-Range': f'bytes {start}-{end}/{file_size}',
@@ -272,6 +288,14 @@ def create_calibration(video_id: int, payload: CalibrationCreate, db: Session = 
 def list_calibrations(video_id: int, db: Session = Depends(get_db)):
     return db.query(Calibration).filter(Calibration.video_id == video_id).order_by(Calibration.version.desc()).all()
 
+@app.get("/api/v1/calibrations/{calibration_id}", response_model=CalibrationResponse)
+def get_calibration(calibration_id: int, db: Session = Depends(get_db)):
+    calib = db.query(Calibration).filter(Calibration.id == calibration_id).first()
+    if not calib:
+        raise HTTPException(status_code=404, detail="Calibration not found")
+    return calib
+
+
 # --- Jobs API ---
 @app.post("/api/v1/videos/{video_id}/jobs", response_model=JobResponse)
 async def start_processing_job(video_id: int, payload: JobCreate, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
@@ -280,14 +304,18 @@ async def start_processing_job(video_id: int, payload: JobCreate, background_tas
         raise HTTPException(status_code=404, detail="Video not found")
 
     calib_id = payload.calibration_id
+    if calib_id:
+        # Validate that calibration exists and belongs to this exact video
+        c_record = db.query(Calibration).filter(Calibration.id == calib_id).first()
+        if not c_record or c_record.video_id != video_id:
+            calib_id = None
+
     if not calib_id:
         v_calib = db.query(Calibration).filter(Calibration.video_id == video_id).order_by(Calibration.version.desc()).first()
         if v_calib:
             calib_id = v_calib.id
         else:
-            default_calib = db.query(Calibration).first()
-            if default_calib:
-                calib_id = default_calib.id
+            calib_id = None
 
     job = ProcessingJob(
         video_id=video_id,
@@ -480,20 +508,24 @@ def get_job(job_id: int, db: Session = Depends(get_db)):
 @app.get("/api/v1/jobs/{job_id}/tracks")
 def get_job_tracks(job_id: int, db: Session = Depends(get_db)):
     tracks = db.query(Track).filter(Track.job_id == job_id).all()
+    if not tracks:
+        return []
+    trk_ids = [t.id for t in tracks]
+    all_speeds = db.query(SpeedMeasurement).filter(SpeedMeasurement.track_id.in_(trk_ids)).all()
+    speed_map: dict = {}
+    for s in all_speeds:
+        if s.track_id not in speed_map:
+            speed_map[s.track_id] = []
+        speed_map[s.track_id].append({
+            "frame": s.frame_index,
+            "timestamp": s.timestamp,
+            "instantaneous_kmh": s.instantaneous_kmh,
+            "smoothed_kmh": s.smoothed_kmh,
+            "uncertainty_kmh": s.uncertainty_kmh,
+            "error_components": s.error_components_json
+        })
     res = []
     for trk in tracks:
-        speeds = db.query(SpeedMeasurement).filter(SpeedMeasurement.track_id == trk.id).all()
-        speed_list = [
-            {
-                "frame": s.frame_index,
-                "timestamp": s.timestamp,
-                "instantaneous_kmh": s.instantaneous_kmh,
-                "smoothed_kmh": s.smoothed_kmh,
-                "uncertainty_kmh": s.uncertainty_kmh,
-                "error_components": s.error_components_json
-            }
-            for s in speeds
-        ]
         res.append({
             "db_id": trk.id,
             "track_id": trk.track_id,
@@ -502,7 +534,7 @@ def get_job_tracks(job_id: int, db: Session = Depends(get_db)):
             "first_frame": trk.first_frame,
             "last_frame": trk.last_frame,
             "trajectory": trk.trajectory_json,
-            "speed_measurements": speed_list
+            "speed_measurements": speed_map.get(trk.id, [])
         })
     return res
 
@@ -807,6 +839,142 @@ def get_job_accident_candidates(job_id: int, db: Session = Depends(get_db)):
         "total_accident_candidates": len(acc_intel.get("accident_candidates", [])),
         "accident_candidates": acc_intel.get("accident_candidates", []),
         "disclaimer": "EXPERIMENTAL ACCIDENT INTELLIGENCE — HUMAN REVIEW REQUIRED. NOT LEGAL CONFIRMATION."
+    }
+
+
+# --- Phase 22: Individual Vehicle Speed Intelligence API ---
+@app.get("/api/v1/jobs/{job_id}/vehicle-speeds")
+def get_job_vehicle_speeds(job_id: int, db: Session = Depends(get_db)):
+    """
+    Phase 22 — Returns per-vehicle speed intelligence summaries for a completed job.
+    Aggregates avg/max/min valid speeds, measurement counts, track status, and calibration info.
+    Reuses existing Track and SpeedMeasurement tables without creating new data models.
+    """
+    job = db.query(ProcessingJob).filter(ProcessingJob.id == job_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    tracks = db.query(Track).filter(Track.job_id == job_id).all()
+    if not tracks:
+        return {"job_id": job_id, "vehicle_count": 0, "vehicles": [], "calibration_status": "NO_DATA"}
+
+    # Batch-load all speed measurements for this job's tracks
+    track_ids = [trk.id for trk in tracks]
+    all_measurements = db.query(SpeedMeasurement).filter(
+        SpeedMeasurement.track_id.in_(track_ids)
+    ).order_by(SpeedMeasurement.frame_index.asc()).all()
+
+    # Group measurements by track
+    measurements_by_track = {}
+    for m in all_measurements:
+        measurements_by_track.setdefault(m.track_id, []).append(m)
+
+    # Determine calibration status from job telemetry
+    telemetry = job.telemetry_json or {}
+    calib_validation = telemetry.get("calibration_validation", {})
+    calib_status = "ACTIVE" if calib_validation.get("is_valid") else "NOT_CONFIGURED"
+
+    vehicles = []
+    for trk in tracks:
+        track_measurements = measurements_by_track.get(trk.id, [])
+
+        # Separate valid from invalid measurements
+        valid_speeds = [
+            m.smoothed_kmh for m in track_measurements
+            if m.smoothed_kmh is not None and m.smoothed_kmh > 0
+            and (m.error_components_json or {}).get("validity") in ("VALID", None)
+        ]
+        all_recorded_speeds = [
+            m.smoothed_kmh for m in track_measurements
+            if m.smoothed_kmh is not None and m.smoothed_kmh > 0
+        ]
+
+        # Compute aggregated speed statistics only from valid measurements
+        if valid_speeds:
+            avg_speed = round(float(sum(valid_speeds) / len(valid_speeds)), 1)
+            max_speed = round(float(max(valid_speeds)), 1)
+            min_speed = round(float(min(valid_speeds)), 1)
+            latest_speed = round(float(valid_speeds[-1]), 1)
+            speed_status = "VALID"
+        elif all_recorded_speeds:
+            avg_speed = round(float(sum(all_recorded_speeds) / len(all_recorded_speeds)), 1)
+            max_speed = round(float(max(all_recorded_speeds)), 1)
+            min_speed = round(float(min(all_recorded_speeds)), 1)
+            latest_speed = round(float(all_recorded_speeds[-1]), 1)
+            speed_status = "LOW_CONFIDENCE"
+        else:
+            avg_speed = None
+            max_speed = None
+            min_speed = None
+            latest_speed = None
+            # Determine why no speed is available
+            if not track_measurements:
+                speed_status = "NO_MEASUREMENTS"
+            else:
+                # Check the most common validity reason
+                reasons = [
+                    (m.error_components_json or {}).get("validity", "UNKNOWN")
+                    for m in track_measurements
+                ]
+                if "CALIBRATION_REQUIRED" in reasons:
+                    speed_status = "CALIBRATION_REQUIRED"
+                elif "OUT_OF_ROI" in reasons:
+                    speed_status = "OUT_OF_ROI"
+                elif "INSUFFICIENT_HISTORY" in reasons:
+                    speed_status = "INSUFFICIENT_HISTORY"
+                else:
+                    speed_status = "UNAVAILABLE"
+
+        # Latest uncertainty
+        latest_m = track_measurements[-1] if track_measurements else None
+        uncertainty = round(float(latest_m.uncertainty_kmh), 2) if latest_m and latest_m.uncertainty_kmh else None
+
+        # Track duration in frames and seconds
+        duration_frames = max(0, trk.last_frame - trk.first_frame) if trk.first_frame is not None and trk.last_frame is not None else 0
+        video_fps = telemetry.get("video_fps", 29.97)
+        duration_sec = round(duration_frames / max(0.001, video_fps), 2)
+
+        # Determine explicit measurement states per Phase 22.1 Speed Integrity:
+        if valid_speeds:
+            measurement_state = "CALIBRATED_SPEED"
+        elif all_recorded_speeds:
+            measurement_state = "UNCALIBRATED_MOTION"
+        else:
+            measurement_state = "SPEED_UNAVAILABLE"
+
+        vehicles.append({
+            "track_id": trk.track_id,
+            "db_id": trk.id,
+            "vehicle_class": trk.vehicle_class,
+            "confidence": round(float(trk.confidence), 3),
+            "first_frame": trk.first_frame,
+            "last_frame": trk.last_frame,
+            "duration_frames": duration_frames,
+            "duration_sec": duration_sec,
+            "latest_speed_kmh": latest_speed,
+            "avg_speed_kmh": avg_speed,
+            "max_speed_kmh": max_speed,
+            "min_speed_kmh": min_speed,
+            "speed_status": speed_status,
+            "measurement_state": measurement_state,
+            "uncertainty_kmh": uncertainty,
+            "total_measurements": len(track_measurements),
+            "valid_measurements": len(valid_speeds),
+            "measurement_coverage_pct": round(
+                100.0 * len(valid_speeds) / max(1, duration_frames), 1
+            ) if duration_frames > 0 else 0.0
+        })
+
+    # Sort by track_id for deterministic output
+    vehicles.sort(key=lambda v: v["track_id"])
+
+    return {
+        "job_id": job_id,
+        "job_status": job.status,
+        "vehicle_count": len(vehicles),
+        "calibration_status": calib_status,
+        "video_fps": telemetry.get("video_fps"),
+        "vehicles": vehicles
     }
 
 

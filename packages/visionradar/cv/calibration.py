@@ -66,10 +66,10 @@ class HomographyCalibrator:
         pts = np.array(self.image_points, dtype=np.float32) if self.image_points else np.array([])
         max_x = np.max(pts[:, 0]) if len(pts) > 0 else 1000.0
         
-        # Scale (u, v) ONLY if (u, v) are in 1920x1080 pixel space while image_points are in 800x450 space
+        # Scale (u, v) ONLY if (u, v) are in source pixel space while image_points are in 800x450 space
         if max_x <= 850.0 and (u > 850.0 or v > 450.0):
-            sw = max(1920.0, source_width)
-            sh = max(1080.0, source_height)
+            sw = float(source_width) if source_width > 0 else 1920.0
+            sh = float(source_height) if source_height > 0 else 1080.0
             test_u = u * (800.0 / sw)
             test_v = v * (450.0 / sh)
         else:
@@ -103,8 +103,8 @@ class HomographyCalibrator:
         max_x = np.max(pts[:, 0])
 
         if max_x <= 850.0 and (u > 850.0 or v > 450.0):
-            sw = max(1920.0, source_width)
-            sh = max(1080.0, source_height)
+            sw = float(source_width) if source_width > 0 else 1920.0
+            sh = float(source_height) if source_height > 0 else 1080.0
             test_u = u * (800.0 / sw)
             test_v = v * (450.0 / sh)
         else:
@@ -129,8 +129,8 @@ class HomographyCalibrator:
         max_x = np.max(pts[:, 0]) if len(pts) > 0 else 1000.0
         
         if max_x <= 850.0 and (u > 850.0 or v > 450.0):
-            sw = max(1920.0, source_width)
-            sh = max(1080.0, source_height)
+            sw = float(source_width) if source_width > 0 else 1920.0
+            sh = float(source_height) if source_height > 0 else 1080.0
             test_u = u * (800.0 / sw)
             test_v = v * (450.0 / sh)
         else:
