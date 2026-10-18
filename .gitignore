@@ -35,6 +35,6 @@ Thumbs.db
 
 # Large Datasets
 DATASETS/
-data/debug/
-data/dataset_audit_temp.json
+# Binaries
+cloudflared.exe
 
