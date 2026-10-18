@@ -62,6 +62,13 @@ def startup_cleanup():
         if stale_jobs:
             db.commit()
             print(f"[STARTUP] Cleaned up {len(stale_jobs)} stale job(s) from database.")
+
+        # Ensure default project exists for single-tenant / workbench workflows
+        default_proj = db.query(Project).filter(Project.id == 1).first()
+        if not default_proj:
+            db.add(Project(id=1, name="VisionRadar Default", description="Auto-seeded default project for monitoring"))
+            db.commit()
+            print("[STARTUP] Auto-seeded default Project #1.")
     except Exception as e:
         db.rollback()
         print(f"[STARTUP ERROR] {e}")
@@ -147,7 +154,11 @@ async def upload_video(project_id: int, file: UploadFile = File(...), db: Sessio
     import cv2 as _cv2
     project = db.query(Project).filter(Project.id == project_id).first()
     if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
+        # Resilient fallback: auto-create project so fresh environments never reject video uploads
+        project = Project(id=project_id, name=f"Project {project_id}", description="Auto-created project")
+        db.add(project)
+        db.commit()
+        db.refresh(project)
 
     content = await file.read()
     if len(content) == 0:
