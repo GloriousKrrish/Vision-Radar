@@ -110,6 +110,7 @@ export const WorkbenchView: React.FC = () => {
   const [speedLimit, setSpeedLimit] = useState(80);
   const [sidebarTab, setSidebarTab] = useState<'log' | 'inspector'>('log');
   const [logFilter, setLogFilter] = useState<'all' | 'active' | 'speeding'>('all');
+  const [renderTick, setRenderTick] = useState<number>(0);
 
   // --- crowded-scene intelligent visualization state ---
   const [vizMode, setVizMode] = useState<'MINIMAL' | 'STANDARD' | 'INTELLIGENCE'>('STANDARD');
@@ -668,6 +669,93 @@ export const WorkbenchView: React.FC = () => {
     }
   };
 
+  const handleInspectTrack = (targetTrackId: number, preferredFrame?: number) => {
+    setSelTrack(targetTrackId);
+    setSidebarTab('inspector');
+    setPlaying(false);
+
+    let targetFrame: number | null = preferredFrame ?? null;
+
+    if (targetFrame === null) {
+      if (isRealVideoRef.current) {
+        // 1. Check realTracks (finalized DB tracks)
+        if (realTracks && realTracks.length > 0) {
+          const trk = realTracks.find((t: any) => t.track_id === targetTrackId);
+          if (trk) {
+            const traj = Array.isArray(trk.trajectory)
+              ? trk.trajectory
+              : (typeof trk.trajectory === 'string' ? (JSON.parse(trk.trajectory) || []) : []);
+            if (traj && traj.length > 0) {
+              const midIdx = Math.floor(traj.length / 2);
+              targetFrame = traj[midIdx]?.frame_index ?? traj[0]?.frame_index ?? null;
+            } else if (typeof trk.first_frame === 'number' && trk.first_frame >= 0) {
+              targetFrame = trk.first_frame;
+            }
+          }
+        }
+
+        // 2. Check frameMapRef (pre-computed frames from DB)
+        if (targetFrame === null && frameMapRef.current && frameMapRef.current.size > 0) {
+          const matchedFrames: number[] = [];
+          for (const [fIndex, dets] of frameMapRef.current.entries()) {
+            if (dets && dets.some((d: any) => d.track_id === targetTrackId)) {
+              matchedFrames.push(fIndex);
+            }
+          }
+          if (matchedFrames.length > 0) {
+            targetFrame = matchedFrames[Math.floor(matchedFrames.length / 2)];
+          }
+        }
+
+        // 3. Check rtFrameBufferRef (live streaming frame buffer)
+        if (targetFrame === null && rtFrameBufferRef.current && rtFrameBufferRef.current.size > 0) {
+          const matchedFrames: number[] = [];
+          for (const [fIndex, dets] of rtFrameBufferRef.current.entries()) {
+            if (dets && dets.some((d: any) => d.track_id === targetTrackId)) {
+              matchedFrames.push(fIndex);
+            }
+          }
+          if (matchedFrames.length > 0) {
+            targetFrame = matchedFrames[Math.floor(matchedFrames.length / 2)];
+          }
+        }
+      } else {
+        // Synthetic demo vehicles
+        const demoVeh = V.find(v => v.id === targetTrackId);
+        if (demoVeh) {
+          targetFrame = Math.max(0, Math.floor(((demoVeh.off || 0) / (demoVeh.v || 20)) * FPS) % N);
+        }
+      }
+    }
+
+    const vFps = telemetry?.video_fps || 29.97;
+    if (targetFrame !== null && targetFrame >= 0) {
+      setFrame(targetFrame);
+      if (isRealVideoRef.current && videoRef.current) {
+        videoRef.current.pause();
+        const targetTime = targetFrame / vFps;
+        if (Math.abs(videoRef.current.currentTime - targetTime) < 0.04) {
+          setRenderTick(t => t + 1);
+        } else {
+          videoRef.current.currentTime = Math.max(0, targetTime);
+        }
+      } else {
+        setRenderTick(t => t + 1);
+      }
+    } else {
+      setRenderTick(t => t + 1);
+    }
+
+    // Scroll smoothly up to the video player so the user immediately sees the vehicle in the clip
+    setTimeout(() => {
+      if (canvasRef.current) {
+        canvasRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      } else if (videoRef.current) {
+        videoRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }, 60);
+  };
+
   // =========================================================================
   // Synchronized Animation Loop for Video & Synthetic Demo
   // =========================================================================
@@ -1179,7 +1267,7 @@ export const WorkbenchView: React.FC = () => {
       cx.fillStyle = '#FCD34D'; cx.textAlign = 'right'; cx.fillText(demoBadge, W - 14, 22);
     }
   }, [
-    frame, speedLimit, selTrack, hoveredTrack, isRealVideo, realTracks, telemetry,
+    frame, renderTick, speedLimit, selTrack, hoveredTrack, isRealVideo, realTracks, telemetry,
     realCalib, latestInferenceFrame, processingFps, activeJobId,
     vizMode, showLabels, showTrajectories, classFilter, minConfidence,
     focusSelected, maxLabels
@@ -1382,8 +1470,7 @@ export const WorkbenchView: React.FC = () => {
         if (x >= bx - 8 && x <= bx + bw + 8 && y >= by - 8 && y <= by + bh + 8) hitTrk = det.track_id;
       });
       if (hitTrk !== null) {
-        setSelTrack(hitTrk);
-        setPlaying(false);
+        handleInspectTrack(hitTrk, currentVidFrame);
       } else {
         setSelTrack(null);
         setFocusSelected(false);
@@ -1396,8 +1483,7 @@ export const WorkbenchView: React.FC = () => {
         if (s.d > 6 && s.d < 125 && x > s.x - s.bw / 2 - 4 && x < s.x + s.bw / 2 + 4 && y > s.y - s.bh - 4 && y < s.y + 4) hit = a.id;
       });
       if (hit) {
-        setSelTrack(hit);
-        setPlaying(false);
+        handleInspectTrack(hit, frame);
       } else {
         setSelTrack(null);
         setFocusSelected(false);
@@ -1593,8 +1679,7 @@ export const WorkbenchView: React.FC = () => {
                     <tr
                       key={log.track_id}
                       onClick={() => {
-                        setSelTrack(log.track_id);
-                        setSidebarTab('inspector');
+                        handleInspectTrack(log.track_id);
                       }}
                       style={{
                         background: isSelected ? 'rgba(245, 158, 11, 0.2)' : log.inCurrentFrame ? 'rgba(16, 185, 129, 0.08)' : 'transparent',
@@ -2007,6 +2092,7 @@ export const WorkbenchView: React.FC = () => {
               videoRef.current?.play().catch(() => {});
             }}
             onSeeked={() => {
+              setRenderTick(t => t + 1);
               if (canvasRef.current && videoRef.current) {
                 // Re-trigger render on seek
                 setFrame(Math.floor((videoRef.current.currentTime || 0) * (telemetry?.video_fps || 29.97)));
@@ -2289,7 +2375,7 @@ export const WorkbenchView: React.FC = () => {
                     <td>#{e.id}</td>
                     <td style={{ color: '#EF4444', fontWeight: 700 }}>{typeof e.v === 'number' ? e.v.toFixed(1) : e.v} km/h</td>
                     <td>{e.loc}</td>
-                    <td><button className="b g" onClick={() => { setSelTrack(e.id); if (typeof e.t === 'number') setFrame(Math.max(0, (e.t * FPS) | 0)); setPlaying(false); }}>View</button></td>
+                    <td><button className="b g" onClick={() => { handleInspectTrack(e.id, typeof e.t === 'number' ? Math.max(0, Math.round(e.t * (telemetry?.video_fps || FPS))) : undefined); }}>View</button></td>
                   </tr>
                 ))}
               </tbody>
@@ -2344,7 +2430,7 @@ export const WorkbenchView: React.FC = () => {
                         return (
                           <tr
                             key={row.track_id}
-                            onClick={() => { setSelTrack(row.track_id); setPlaying(false); }}
+                            onClick={() => handleInspectTrack(row.track_id)}
                             style={{
                               borderBottom: '1px solid #F1F5F9',
                               background: isSelected ? '#FEF3C7' : 'transparent',
@@ -2407,8 +2493,7 @@ export const WorkbenchView: React.FC = () => {
                                 style={{ padding: '2px 8px', fontSize: '11px' }}
                                 onClick={(ev) => {
                                   ev.stopPropagation();
-                                  setSelTrack(row.track_id);
-                                  setPlaying(false);
+                                  handleInspectTrack(row.track_id);
                                 }}
                               >
                                 Inspect
