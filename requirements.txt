@@ -11,3 +11,5 @@ pydantic-settings
 reportlab
 requests
 python-multipart
+onnx
+onnxruntime

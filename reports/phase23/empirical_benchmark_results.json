@@ -1,0 +1,509 @@
+{
+  "timestamp": 1792418734.4452515,
+  "baseline_640": {
+    "precision": 0.6195,
+    "recall": 0.7292,
+    "f1": 0.6699,
+    "total_tp": 70,
+    "total_fp": 43,
+    "total_fn": 26,
+    "per_class": {
+      "Car": {
+        "precision": 0.3429,
+        "recall": 0.4286,
+        "f1": 0.381,
+        "tp": 12,
+        "fp": 23,
+        "fn": 16
+      },
+      "Bus": {
+        "precision": 0.7576,
+        "recall": 0.8929,
+        "f1": 0.8197,
+        "tp": 25,
+        "fp": 8,
+        "fn": 3
+      },
+      "Truck": {
+        "precision": 0.625,
+        "recall": 0.8,
+        "f1": 0.7018,
+        "tp": 20,
+        "fp": 12,
+        "fn": 5
+      },
+      "Motorcycle": {
+        "precision": 1.0,
+        "recall": 0.8667,
+        "f1": 0.9286,
+        "tp": 13,
+        "fp": 0,
+        "fn": 2
+      }
+    },
+    "size_breakdown": {
+      "small_under_25px_h": {
+        "tp": 0,
+        "fn": 0,
+        "gt": 0
+      },
+      "medium_25_to_80px_h": {
+        "tp": 1,
+        "fn": 1,
+        "gt": 2
+      },
+      "large_over_80px_h": {
+        "tp": 69,
+        "fn": 25,
+        "gt": 94
+      }
+    },
+    "latency_mean_ms": 97.96,
+    "latency_p95_ms": 115.53,
+    "throughput_fps": 10.2
+  },
+  "optimized_416": {
+    "precision": 0.5695,
+    "recall": 0.8958,
+    "f1": 0.6964,
+    "total_tp": 86,
+    "total_fp": 65,
+    "total_fn": 10,
+    "per_class": {
+      "Car": {
+        "precision": 0.4348,
+        "recall": 0.7143,
+        "f1": 0.5405,
+        "tp": 20,
+        "fp": 26,
+        "fn": 8
+      },
+      "Bus": {
+        "precision": 0.7105,
+        "recall": 0.9643,
+        "f1": 0.8182,
+        "tp": 27,
+        "fp": 11,
+        "fn": 1
+      },
+      "Truck": {
+        "precision": 0.4615,
+        "recall": 0.96,
+        "f1": 0.6234,
+        "tp": 24,
+        "fp": 28,
+        "fn": 1
+      },
+      "Motorcycle": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "tp": 15,
+        "fp": 0,
+        "fn": 0
+      }
+    },
+    "size_breakdown": {
+      "small_under_25px_h": {
+        "tp": 0,
+        "fn": 0,
+        "gt": 0
+      },
+      "medium_25_to_80px_h": {
+        "tp": 1,
+        "fn": 1,
+        "gt": 2
+      },
+      "large_over_80px_h": {
+        "tp": 85,
+        "fn": 9,
+        "gt": 94
+      }
+    },
+    "latency_mean_ms": 44.2,
+    "latency_p95_ms": 54.44,
+    "throughput_fps": 22.6
+  },
+  "highres_640": {
+    "precision": 0.5612,
+    "recall": 0.8125,
+    "f1": 0.6638,
+    "total_tp": 78,
+    "total_fp": 61,
+    "total_fn": 18,
+    "per_class": {
+      "Car": {
+        "precision": 0.4146,
+        "recall": 0.6071,
+        "f1": 0.4928,
+        "tp": 17,
+        "fp": 24,
+        "fn": 11
+      },
+      "Bus": {
+        "precision": 0.7143,
+        "recall": 0.8929,
+        "f1": 0.7937,
+        "tp": 25,
+        "fp": 10,
+        "fn": 3
+      },
+      "Truck": {
+        "precision": 0.46,
+        "recall": 0.92,
+        "f1": 0.6133,
+        "tp": 23,
+        "fp": 27,
+        "fn": 2
+      },
+      "Motorcycle": {
+        "precision": 1.0,
+        "recall": 0.8667,
+        "f1": 0.9286,
+        "tp": 13,
+        "fp": 0,
+        "fn": 2
+      }
+    },
+    "size_breakdown": {
+      "small_under_25px_h": {
+        "tp": 0,
+        "fn": 0,
+        "gt": 0
+      },
+      "medium_25_to_80px_h": {
+        "tp": 1,
+        "fn": 1,
+        "gt": 2
+      },
+      "large_over_80px_h": {
+        "tp": 77,
+        "fn": 17,
+        "gt": 94
+      }
+    },
+    "latency_mean_ms": 88.94,
+    "latency_p95_ms": 100.41,
+    "throughput_fps": 11.2
+  },
+  "confidence_sweep_416": {
+    "conf_0.15": {
+      "precision": 0.5028,
+      "recall": 0.9375,
+      "f1": 0.6545,
+      "total_tp": 90,
+      "total_fp": 89,
+      "total_fn": 6,
+      "per_class": {
+        "Car": {
+          "precision": 0.377,
+          "recall": 0.8214,
+          "f1": 0.5169,
+          "tp": 23,
+          "fp": 38,
+          "fn": 5
+        },
+        "Bus": {
+          "precision": 0.6829,
+          "recall": 1.0,
+          "f1": 0.8116,
+          "tp": 28,
+          "fp": 13,
+          "fn": 0
+        },
+        "Truck": {
+          "precision": 0.3871,
+          "recall": 0.96,
+          "f1": 0.5517,
+          "tp": 24,
+          "fp": 38,
+          "fn": 1
+        },
+        "Motorcycle": {
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1": 1.0,
+          "tp": 15,
+          "fp": 0,
+          "fn": 0
+        }
+      },
+      "size_breakdown": {
+        "small_under_25px_h": {
+          "tp": 0,
+          "fn": 0,
+          "gt": 0
+        },
+        "medium_25_to_80px_h": {
+          "tp": 1,
+          "fn": 1,
+          "gt": 2
+        },
+        "large_over_80px_h": {
+          "tp": 89,
+          "fn": 5,
+          "gt": 94
+        }
+      },
+      "latency_mean_ms": 39.63,
+      "latency_p95_ms": 46.28,
+      "throughput_fps": 25.2
+    },
+    "conf_0.20": {
+      "precision": 0.5394,
+      "recall": 0.9271,
+      "f1": 0.682,
+      "total_tp": 89,
+      "total_fp": 76,
+      "total_fn": 7,
+      "per_class": {
+        "Car": {
+          "precision": 0.4259,
+          "recall": 0.8214,
+          "f1": 0.561,
+          "tp": 23,
+          "fp": 31,
+          "fn": 5
+        },
+        "Bus": {
+          "precision": 0.675,
+          "recall": 0.9643,
+          "f1": 0.7941,
+          "tp": 27,
+          "fp": 13,
+          "fn": 1
+        },
+        "Truck": {
+          "precision": 0.4286,
+          "recall": 0.96,
+          "f1": 0.5926,
+          "tp": 24,
+          "fp": 32,
+          "fn": 1
+        },
+        "Motorcycle": {
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1": 1.0,
+          "tp": 15,
+          "fp": 0,
+          "fn": 0
+        }
+      },
+      "size_breakdown": {
+        "small_under_25px_h": {
+          "tp": 0,
+          "fn": 0,
+          "gt": 0
+        },
+        "medium_25_to_80px_h": {
+          "tp": 1,
+          "fn": 1,
+          "gt": 2
+        },
+        "large_over_80px_h": {
+          "tp": 88,
+          "fn": 6,
+          "gt": 94
+        }
+      },
+      "latency_mean_ms": 40.19,
+      "latency_p95_ms": 45.48,
+      "throughput_fps": 24.9
+    },
+    "conf_0.25": {
+      "precision": 0.5695,
+      "recall": 0.8958,
+      "f1": 0.6964,
+      "total_tp": 86,
+      "total_fp": 65,
+      "total_fn": 10,
+      "per_class": {
+        "Car": {
+          "precision": 0.4348,
+          "recall": 0.7143,
+          "f1": 0.5405,
+          "tp": 20,
+          "fp": 26,
+          "fn": 8
+        },
+        "Bus": {
+          "precision": 0.7105,
+          "recall": 0.9643,
+          "f1": 0.8182,
+          "tp": 27,
+          "fp": 11,
+          "fn": 1
+        },
+        "Truck": {
+          "precision": 0.4615,
+          "recall": 0.96,
+          "f1": 0.6234,
+          "tp": 24,
+          "fp": 28,
+          "fn": 1
+        },
+        "Motorcycle": {
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1": 1.0,
+          "tp": 15,
+          "fp": 0,
+          "fn": 0
+        }
+      },
+      "size_breakdown": {
+        "small_under_25px_h": {
+          "tp": 0,
+          "fn": 0,
+          "gt": 0
+        },
+        "medium_25_to_80px_h": {
+          "tp": 1,
+          "fn": 1,
+          "gt": 2
+        },
+        "large_over_80px_h": {
+          "tp": 85,
+          "fn": 9,
+          "gt": 94
+        }
+      },
+      "latency_mean_ms": 38.03,
+      "latency_p95_ms": 41.6,
+      "throughput_fps": 26.3
+    },
+    "conf_0.30": {
+      "precision": 0.6187,
+      "recall": 0.8958,
+      "f1": 0.7319,
+      "total_tp": 86,
+      "total_fp": 53,
+      "total_fn": 10,
+      "per_class": {
+        "Car": {
+          "precision": 0.5,
+          "recall": 0.7143,
+          "f1": 0.5882,
+          "tp": 20,
+          "fp": 20,
+          "fn": 8
+        },
+        "Bus": {
+          "precision": 0.7941,
+          "recall": 0.9643,
+          "f1": 0.871,
+          "tp": 27,
+          "fp": 7,
+          "fn": 1
+        },
+        "Truck": {
+          "precision": 0.48,
+          "recall": 0.96,
+          "f1": 0.64,
+          "tp": 24,
+          "fp": 26,
+          "fn": 1
+        },
+        "Motorcycle": {
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1": 1.0,
+          "tp": 15,
+          "fp": 0,
+          "fn": 0
+        }
+      },
+      "size_breakdown": {
+        "small_under_25px_h": {
+          "tp": 0,
+          "fn": 0,
+          "gt": 0
+        },
+        "medium_25_to_80px_h": {
+          "tp": 1,
+          "fn": 1,
+          "gt": 2
+        },
+        "large_over_80px_h": {
+          "tp": 85,
+          "fn": 9,
+          "gt": 94
+        }
+      },
+      "latency_mean_ms": 40.13,
+      "latency_p95_ms": 47.54,
+      "throughput_fps": 24.9
+    },
+    "conf_0.35": {
+      "precision": 0.6538,
+      "recall": 0.8854,
+      "f1": 0.7522,
+      "total_tp": 85,
+      "total_fp": 45,
+      "total_fn": 11,
+      "per_class": {
+        "Car": {
+          "precision": 0.5556,
+          "recall": 0.7143,
+          "f1": 0.625,
+          "tp": 20,
+          "fp": 16,
+          "fn": 8
+        },
+        "Bus": {
+          "precision": 0.8438,
+          "recall": 0.9643,
+          "f1": 0.9,
+          "tp": 27,
+          "fp": 5,
+          "fn": 1
+        },
+        "Truck": {
+          "precision": 0.4894,
+          "recall": 0.92,
+          "f1": 0.6389,
+          "tp": 23,
+          "fp": 24,
+          "fn": 2
+        },
+        "Motorcycle": {
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1": 1.0,
+          "tp": 15,
+          "fp": 0,
+          "fn": 0
+        }
+      },
+      "size_breakdown": {
+        "small_under_25px_h": {
+          "tp": 0,
+          "fn": 0,
+          "gt": 0
+        },
+        "medium_25_to_80px_h": {
+          "tp": 1,
+          "fn": 1,
+          "gt": 2
+        },
+        "large_over_80px_h": {
+          "tp": 84,
+          "fn": 10,
+          "gt": 94
+        }
+      },
+      "latency_mean_ms": 37.61,
+      "latency_p95_ms": 39.94,
+      "throughput_fps": 26.6
+    }
+  },
+  "stage_latency_ms": {
+    "decode": NaN,
+    "preprocess": 4.46,
+    "inference": 34.8,
+    "postprocess": 6.9,
+    "track": 0.65,
+    "speed": 2.79
+  }
+}

@@ -79,8 +79,8 @@ class Track(Base):
     __tablename__ = "tracks"
 
     id = Column(Integer, primary_key=True, index=True)
-    job_id = Column(Integer, ForeignKey("processing_jobs.id"), nullable=False)
-    track_id = Column(Integer, nullable=False)
+    job_id = Column(Integer, ForeignKey("processing_jobs.id"), nullable=False, index=True)
+    track_id = Column(Integer, nullable=False, index=True)
     vehicle_class = Column(String(64), nullable=False)
     confidence = Column(Float, nullable=False, default=1.0)
     first_frame = Column(Integer, nullable=False)
@@ -95,7 +95,7 @@ class SpeedMeasurement(Base):
     __tablename__ = "speed_measurements"
 
     id = Column(Integer, primary_key=True, index=True)
-    track_id = Column(Integer, ForeignKey("tracks.id"), nullable=False)
+    track_id = Column(Integer, ForeignKey("tracks.id"), nullable=False, index=True)
     frame_index = Column(Integer, nullable=False)
     timestamp = Column(Float, nullable=False)
     instantaneous_kmh = Column(Float, nullable=True)

@@ -1,5 +1,5 @@
 {
-  "benchmark_timestamp": "2026-10-13T09:02:25Z",
+  "benchmark_timestamp": "2026-10-19T13:56:45Z",
   "baseline": {
     "model_name": "YOLOX-Nano-ONNX (Baseline)",
     "model_sha256": "c789161ed43c8269fcd4e67c67eeeb4e80c622da2eb296a20bc6007bd18a0b7d",
@@ -21,7 +21,7 @@
         "tp": 79,
         "fp": 73,
         "fn": 18,
-        "latency_ms": 96.24
+        "latency_ms": 120.71
       },
       "conf_0.20": {
         "confidence_threshold": 0.2,
@@ -33,7 +33,7 @@
         "tp": 77,
         "fp": 64,
         "fn": 20,
-        "latency_ms": 100.11
+        "latency_ms": 109.58
       },
       "conf_0.25": {
         "confidence_threshold": 0.25,
@@ -45,7 +45,7 @@
         "tp": 76,
         "fp": 57,
         "fn": 21,
-        "latency_ms": 92.09
+        "latency_ms": 105.73
       },
       "conf_0.35": {
         "confidence_threshold": 0.35,
@@ -57,7 +57,7 @@
         "tp": 69,
         "fp": 42,
         "fn": 28,
-        "latency_ms": 95.74
+        "latency_ms": 96.37
       },
       "conf_0.45": {
         "confidence_threshold": 0.45,
@@ -69,7 +69,7 @@
         "tp": 66,
         "fp": 28,
         "fn": 31,
-        "latency_ms": 98.41
+        "latency_ms": 103.81
       }
     },
     "datasets": {
@@ -140,9 +140,9 @@
         "mAP_0.50": 0.6896,
         "mAP_0.50_0.95": 0.4939,
         "latency_ms": {
-          "mean": 97.99,
-          "p95": 107.37,
-          "throughput_fps": 10.2
+          "mean": 100.56,
+          "p95": 116.96,
+          "throughput_fps": 9.9
         },
         "peak_memory_mb": 652.6,
         "failure_cases": [
@@ -1401,11 +1401,11 @@
         "mAP_0.50": 0.6677,
         "mAP_0.50_0.95": 0.4801,
         "latency_ms": {
-          "mean": 94.99,
-          "p95": 103.18,
-          "throughput_fps": 10.5
+          "mean": 97.67,
+          "p95": 113.86,
+          "throughput_fps": 10.2
         },
-        "peak_memory_mb": 652.6,
+        "peak_memory_mb": 652.7,
         "failure_cases": [
           {
             "item_id": "bus_122_jpg.rf.4e67a85c74b83dd931daad587aa0bd26",
@@ -2647,11 +2647,11 @@
         "mAP_0.50": 0.2294,
         "mAP_0.50_0.95": 0.0671,
         "latency_ms": {
-          "mean": 95.19,
-          "p95": 102.01,
-          "throughput_fps": 10.5
+          "mean": 105.92,
+          "p95": 122.94,
+          "throughput_fps": 9.4
         },
-        "peak_memory_mb": 660.5,
+        "peak_memory_mb": 660.8,
         "failure_cases": [
           {
             "item_id": "04308_20231013_125549_jpg.rf.608c7f0e9820c8f871ffce38dc7b1281",
@@ -5723,11 +5723,11 @@
         "mAP_0.50": 0.6412,
         "mAP_0.50_0.95": 0.4045,
         "latency_ms": {
-          "mean": 95.27,
-          "p95": 109.35,
-          "throughput_fps": 10.5
+          "mean": 106.31,
+          "p95": 158.48,
+          "throughput_fps": 9.4
         },
-        "peak_memory_mb": 661.6,
+        "peak_memory_mb": 661.5,
         "failure_cases": [
           {
             "item_id": "frame_1",
@@ -8812,11 +8812,11 @@
         "mAP_0.50": 0.805,
         "mAP_0.50_0.95": 0.664,
         "latency_ms": {
-          "mean": 45.3,
-          "p95": 66.71,
-          "throughput_fps": 22.1
+          "mean": 47.75,
+          "p95": 66.62,
+          "throughput_fps": 20.9
         },
-        "peak_memory_mb": 686.0,
+        "peak_memory_mb": 686.4,
         "failure_cases": [
           {
             "item_id": "bus_106_jpg.rf.ac6cf823d18b7db871f434aa734af1a3",
@@ -10013,11 +10013,11 @@
         "mAP_0.50": 0.8054,
         "mAP_0.50_0.95": 0.6941,
         "latency_ms": {
-          "mean": 39.65,
-          "p95": 42.61,
-          "throughput_fps": 25.2
+          "mean": 43.53,
+          "p95": 51.65,
+          "throughput_fps": 23.0
         },
-        "peak_memory_mb": 686.0,
+        "peak_memory_mb": 686.4,
         "failure_cases": [
           {
             "item_id": "bus_10_jpg.rf.6aff9bfdc158f0cf1f6dee6341265627",
@@ -11064,11 +11064,11 @@
         "mAP_0.50": 0.2025,
         "mAP_0.50_0.95": 0.0662,
         "latency_ms": {
-          "mean": 41.43,
-          "p95": 45.97,
-          "throughput_fps": 24.1
+          "mean": 47.47,
+          "p95": 60.51,
+          "throughput_fps": 21.1
         },
-        "peak_memory_mb": 686.3,
+        "peak_memory_mb": 686.5,
         "failure_cases": [
           {
             "item_id": "04308_20231013_125549_jpg.rf.608c7f0e9820c8f871ffce38dc7b1281",
@@ -14140,11 +14140,11 @@
         "mAP_0.50": 0.4549,
         "mAP_0.50_0.95": 0.2027,
         "latency_ms": {
-          "mean": 45.36,
-          "p95": 52.35,
-          "throughput_fps": 22.0
+          "mean": 48.22,
+          "p95": 58.44,
+          "throughput_fps": 20.7
         },
-        "peak_memory_mb": 685.2,
+        "peak_memory_mb": 685.3,
         "failure_cases": [
           {
             "item_id": "frame_1",
@@ -17229,11 +17229,11 @@
         "mAP_0.50": 0.6896,
         "mAP_0.50_0.95": 0.4939,
         "latency_ms": {
-          "mean": 96.98,
-          "p95": 126.75,
-          "throughput_fps": 10.3
+          "mean": 103.17,
+          "p95": 124.06,
+          "throughput_fps": 9.7
         },
-        "peak_memory_mb": 725.8,
+        "peak_memory_mb": 725.0,
         "failure_cases": [
           {
             "item_id": "bus_104_jpg.rf.9e59f1c2a1c4681e72fdcad4a754fed1",
@@ -18490,11 +18490,11 @@
         "mAP_0.50": 0.6677,
         "mAP_0.50_0.95": 0.4801,
         "latency_ms": {
-          "mean": 92.97,
-          "p95": 104.29,
-          "throughput_fps": 10.8
+          "mean": 91.46,
+          "p95": 104.85,
+          "throughput_fps": 10.9
         },
-        "peak_memory_mb": 725.8,
+        "peak_memory_mb": 725.0,
         "failure_cases": [
           {
             "item_id": "bus_122_jpg.rf.4e67a85c74b83dd931daad587aa0bd26",
@@ -19736,11 +19736,11 @@
         "mAP_0.50": 0.2294,
         "mAP_0.50_0.95": 0.0671,
         "latency_ms": {
-          "mean": 96.88,
-          "p95": 120.12,
-          "throughput_fps": 10.3
+          "mean": 131.82,
+          "p95": 228.62,
+          "throughput_fps": 7.6
         },
-        "peak_memory_mb": 724.0,
+        "peak_memory_mb": 725.4,
         "failure_cases": [
           {
             "item_id": "04308_20231013_125549_jpg.rf.608c7f0e9820c8f871ffce38dc7b1281",
@@ -22812,11 +22812,11 @@
         "mAP_0.50": 0.6412,
         "mAP_0.50_0.95": 0.4045,
         "latency_ms": {
-          "mean": 87.8,
-          "p95": 107.42,
-          "throughput_fps": 11.4
+          "mean": 95.21,
+          "p95": 129.12,
+          "throughput_fps": 10.5
         },
-        "peak_memory_mb": 722.9,
+        "peak_memory_mb": 724.9,
         "failure_cases": [
           {
             "item_id": "frame_1",
@@ -25831,9 +25831,9 @@
       "recall_baseline": 0.8125,
       "recall_improved_416": 0.8958,
       "delta_recall": 0.0833,
-      "fps_baseline": 10.2,
-      "fps_improved_416": 22.1,
-      "fps_speedup_factor": 2.17
+      "fps_baseline": 9.9,
+      "fps_improved_416": 20.9,
+      "fps_speedup_factor": 2.11
     },
     "val_split": {
       "mAP_0.50_baseline": 0.6677,
@@ -25842,9 +25842,9 @@
       "recall_baseline": 0.7835,
       "recall_improved_416": 0.8866,
       "delta_recall": 0.1031,
-      "fps_baseline": 10.5,
-      "fps_improved_416": 25.2,
-      "fps_speedup_factor": 2.4
+      "fps_baseline": 10.2,
+      "fps_improved_416": 23.0,
+      "fps_speedup_factor": 2.25
     }
   }
 }

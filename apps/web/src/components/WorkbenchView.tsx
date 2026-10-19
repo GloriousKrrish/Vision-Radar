@@ -111,6 +111,21 @@ export const WorkbenchView: React.FC = () => {
   const [sidebarTab, setSidebarTab] = useState<'log' | 'inspector'>('log');
   const [logFilter, setLogFilter] = useState<'all' | 'active' | 'speeding'>('all');
 
+  // --- crowded-scene intelligent visualization state ---
+  const [vizMode, setVizMode] = useState<'MINIMAL' | 'STANDARD' | 'INTELLIGENCE'>('STANDARD');
+  const [showLabels, setShowLabels] = useState<boolean>(true);
+  const [showTrajectories, setShowTrajectories] = useState<boolean>(false);
+  const [classFilter, setClassFilter] = useState<'ALL' | 'CAR' | 'BUS' | 'TRUCK' | 'MOTORCYCLE'>('ALL');
+  const [minConfidence, setMinConfidence] = useState<number>(0.25);
+  const [focusSelected, setFocusSelected] = useState<boolean>(false);
+  const [maxLabels, setMaxLabels] = useState<number>(14);
+  const [hoveredTrack, setHoveredTrack] = useState<number | null>(null);
+  const hoveredTrackRef = useRef<number | null>(null);
+
+  // --- table pagination ---
+  const [tablePage, setTablePage] = useState<number>(1);
+  const TABLE_PAGE_SIZE = 10;
+
   // --- refs ---
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -131,6 +146,7 @@ export const WorkbenchView: React.FC = () => {
   const isRealVideoRef = useRef<boolean>(true);
   const pipelineStageRef = useRef<PipelineStage>('IDLE');
   const activeJobIdRef = useRef<number | null>(null);
+  const lastFrameRef = useRef<number>(-1);
 
   useEffect(() => { isRealVideoRef.current = isRealVideo; }, [isRealVideo]);
   useEffect(() => { pipelineStageRef.current = pipelineStage; }, [pipelineStage]);
@@ -308,6 +324,9 @@ export const WorkbenchView: React.FC = () => {
       });
     });
     frameMapRef.current = map;
+    if (map.size > 0) {
+      rtFrameBufferRef.current.clear();
+    }
   }, [realTracks]);
 
   const lastRenderedFrameIdRef = useRef<number>(-1);
@@ -335,7 +354,6 @@ export const WorkbenchView: React.FC = () => {
 
       if (trkData?.length) {
         setRealTracks(trkData);
-        rtFrameBufferRef.current.clear();
       }
       if (violsData?.length) {
         setViolations(violsData.map((v: any) => ({
@@ -486,23 +504,10 @@ export const WorkbenchView: React.FC = () => {
           }
         }
 
-        // Frame synchronization without severe playback rate jumps
+        // Phase 22.3: Decoupled Non-Blocking Playback
+        // Maintain smooth 1.0x playback rate without jarring currentTime seeks
         if (videoRef.current && videoRef.current.readyState > 1) {
-          const vid = videoRef.current;
-          const vFps = telemetry?.video_fps || 29.97;
-          const vidCurrentFrame = Math.floor(vid.currentTime * vFps);
-          const frameLag = vidCurrentFrame - frameIdx;
-
-          if (Math.abs(frameLag) > 60) {
-            // Severe drift: one-time gentle re-anchor
-            vid.currentTime = Math.max(0, frameIdx / vFps);
-          } else if (frameLag > 8) {
-            vid.playbackRate = 0.9;
-          } else if (frameLag < -8) {
-            vid.playbackRate = 1.1;
-          } else {
-            vid.playbackRate = 1.0;
-          }
+          videoRef.current.playbackRate = 1.0;
         }
 
         setLiveTrackCount(tracks.length);
@@ -575,17 +580,44 @@ export const WorkbenchView: React.FC = () => {
       setWsConnected(false);
       // Immediately check REST API for job completion
       fetch(apiUrl(`/api/v1/jobs/${jobId}`)).then(r => r.json()).then(j => {
-        if (j.status === 'SUCCEEDED') loadJobResults(jobId);
+        if (j.status === 'SUCCEEDED') {
+          isLiveStreamingRef.current = false;
+          loadJobResults(jobId);
+        }
       }).catch(() => {});
     };
 
     ws.onclose = () => {
       setWsConnected(false);
-      isLiveStreamingRef.current = false;
-      // Check REST API for job completion on WebSocket close
-      fetch(apiUrl(`/api/v1/jobs/${jobId}`)).then(r => r.json()).then(j => {
-        if (j.status === 'SUCCEEDED') loadJobResults(jobId);
-      }).catch(() => {});
+      // Resilient fallback: If WebSocket disconnects while job is still processing,
+      // poll the REST endpoint every second until terminal state (SUCCEEDED/FAILED/CANCELLED).
+      const pollTimer = setInterval(async () => {
+        try {
+          const res = await fetch(apiUrl(`/api/v1/jobs/${jobId}`));
+          if (!res.ok) {
+            clearInterval(pollTimer);
+            return;
+          }
+          const j = await res.json();
+          if (j.status === 'SUCCEEDED') {
+            clearInterval(pollTimer);
+            isLiveStreamingRef.current = false;
+            setPipelineStage('FINALIZING');
+            setJobStatusText(`Job #${jobId} complete — loading finalized tracks...`);
+            loadJobResults(jobId);
+          } else if (j.status === 'FAILED' || j.status === 'CANCELLED') {
+            clearInterval(pollTimer);
+            isLiveStreamingRef.current = false;
+            setPipelineStage('ERROR');
+            setJobStatusText(`Job #${jobId} ${j.status.toLowerCase()}: ${j.error_message || ''}`);
+          } else if (j.status === 'RUNNING') {
+            setJobProgress(Math.round(j.progress_pct || 0));
+            setJobStatusText(`Job #${jobId} · ● YOLOX Active (${Math.round(j.progress_pct || 0)}%)`);
+          }
+        } catch {
+          clearInterval(pollTimer);
+        }
+      }, 1000);
     };
   }, [loadJobResults]);
 
@@ -647,7 +679,10 @@ export const WorkbenchView: React.FC = () => {
         if (isRealVideoRef.current && videoRef.current) {
           const vFps = telemetry?.video_fps || 29.97;
           const curF = Math.floor((videoRef.current.currentTime || 0) * vFps);
-          setFrame(curF);
+          if (curF !== lastFrameRef.current) {
+            lastFrameRef.current = curF;
+            setFrame(curF);
+          }
         } else if (ts - lastTime > 1000 / FPS) {
           lastTime = ts;
           setFrame(f => { const next = (f + 1) % N; if (next === 0) seenRef.current.clear(); return next; });
@@ -710,10 +745,32 @@ export const WorkbenchView: React.FC = () => {
           cx.fillStyle = '#2563EBEE'; cx.font = '600 10px sans-serif'; cx.textAlign = 'center';
           cx.fillText('CALIBRATED ROAD REGION', (displayPts[0][0] + displayPts[1][0]) / 2, displayPts[0][1] + 16);
         }
-      } else {
-        cx.fillStyle = '#94A3B8CC'; cx.font = 'bold 11px sans-serif'; cx.textAlign = 'left';
-        cx.fillText('ROAD CALIBRATION NOT CONFIGURED · METRIC SPEED UNAVAILABLE', 16, 26);
       }
+
+      // ---------------------------------------------------------------------
+      // CONTEXTUAL ROAD CALIBRATION STATUS BANNER (Requirement #4 & #10)
+      // Single contextual indicator communicating calibration limitation cleanly
+      // ---------------------------------------------------------------------
+      const hasCalib = Boolean(realCalib?.image_points_json && realCalib.image_points_json.length >= 4);
+      const bannerW = hasCalib ? 380 : 440;
+      const bannerH = 20;
+      const bannerX = 12;
+      const bannerY = 10;
+      cx.fillStyle = 'rgba(15, 23, 42, 0.85)';
+      cx.strokeStyle = hasCalib ? '#10B981' : '#64748B';
+      cx.lineWidth = 1;
+      cx.beginPath();
+      if ((cx as any).roundRect) (cx as any).roundRect(bannerX, bannerY, bannerW, bannerH, 4);
+      else cx.rect(bannerX, bannerY, bannerW, bannerH);
+      cx.fill(); cx.stroke();
+
+      cx.fillStyle = hasCalib ? '#34D399' : '#CBD5E1';
+      cx.font = 'bold 9.5px sans-serif';
+      cx.textAlign = 'left';
+      const bannerText = hasCalib
+        ? '✓ ROAD CALIBRATION ACTIVE · Monocular metric speed estimation enabled'
+        : '⚠️ UNCALIBRATED CAMERA · Speed requires road geometry calibration · Tracking active';
+      cx.fillText(bannerText, bannerX + 8, bannerY + 14);
 
       // ---------------------------------------------------------------------
       // REAL Bounding Box Rendering — Frame Sync Contract (Smooth Multi-Frame Matching)
@@ -727,30 +784,118 @@ export const WorkbenchView: React.FC = () => {
         return undefined;
       };
 
+      const getInterpolatedDets = (exactFrame: number, map: Map<number, any[]>, tol: number = 4) => {
+        const f0 = Math.floor(exactFrame);
+        const f1 = Math.ceil(exactFrame);
+        const alpha = exactFrame - f0;
+
+        const baseDets = map.get(f0) || findDets(f0, map, tol);
+        if (!baseDets || baseDets.length === 0) return baseDets;
+        if (alpha < 0.001 || f0 === f1) return baseDets;
+
+        const nextDets = map.get(f1);
+        if (!nextDets || nextDets.length === 0) return baseDets;
+
+        const nextMap = new Map<number, any>();
+        nextDets.forEach(d => nextMap.set(d.track_id, d));
+
+        return baseDets.map(d0 => {
+          const d1 = nextMap.get(d0.track_id);
+          if (!d1) return d0;
+          return {
+            ...d0,
+            rx: d0.rx + alpha * (d1.rx - d0.rx),
+            ry: d0.ry + alpha * (d1.ry - d0.ry),
+            rw: d0.rw + alpha * (d1.rw - d0.rw),
+            rh: d0.rh + alpha * (d1.rh - d0.rh),
+          };
+        });
+      };
+
       let currentFrameDets: any[] | undefined;
-      if (isLiveStreamingRef.current) {
-        currentFrameDets = findDets(currentVidFrame, rtFrameBufferRef.current, 3);
+      if (isLiveStreamingRef.current || frameMapRef.current.size === 0) {
+        currentFrameDets = findDets(currentVidFrame, rtFrameBufferRef.current, 5);
 
         if (!currentFrameDets && latestInferenceFrame !== null && latestInferenceFrame !== undefined) {
-          if (rtFrameBufferRef.current.has(latestInferenceFrame)) {
-            currentFrameDets = rtFrameBufferRef.current.get(latestInferenceFrame);
-          } else {
-            const allKeys = Array.from(rtFrameBufferRef.current.keys());
-            if (allKeys.length > 0) {
-              const closest = allKeys.reduce((prev, curr) => Math.abs(curr - currentVidFrame) < Math.abs(prev - currentVidFrame) ? curr : prev);
-              if (Math.abs(closest - currentVidFrame) <= 15) {
-                currentFrameDets = rtFrameBufferRef.current.get(closest);
-              }
+          const allKeys = Array.from(rtFrameBufferRef.current.keys());
+          if (allKeys.length > 0) {
+            const closest = allKeys.reduce((prev, curr) => Math.abs(curr - currentVidFrame) < Math.abs(prev - currentVidFrame) ? curr : prev);
+            // Strict bounded temporal matching: NEVER render stale detections if drift exceeds 30 frames (~1.0s)
+            if (Math.abs(closest - currentVidFrame) <= 30) {
+              currentFrameDets = rtFrameBufferRef.current.get(closest);
             }
           }
         }
-      } else {
-        currentFrameDets = findDets(currentVidFrame, frameMapRef.current, 5);
+      }
+      if (!currentFrameDets && frameMapRef.current.size > 0) {
+        currentFrameDets = getInterpolatedDets(currentVidTime * videoFps, frameMapRef.current, 5);
       }
 
       if (currentFrameDets && currentFrameDets.length > 0) {
+        // --- 1. Filter tracks per user controls while strictly preserving selected track ---
+        let visibleDets = currentFrameDets;
+        if (focusSelected && selTrack !== null) {
+          visibleDets = visibleDets.filter(d => d.track_id === selTrack);
+        } else {
+          if (classFilter !== 'ALL') {
+            visibleDets = visibleDets.filter(d => d.track_id === selTrack || (d.vehicle_class || 'car').toUpperCase() === classFilter);
+          }
+          if (minConfidence > 0) {
+            visibleDets = visibleDets.filter(d => d.track_id === selTrack || (d.confidence ?? 0.9) >= minConfidence);
+          }
+        }
+
+        // --- 2. Trajectories: Draw historical trails if enabled or in INTELLIGENCE mode ---
+        if (showTrajectories || vizMode === 'INTELLIGENCE') {
+          visibleDets.forEach(det => {
+            const isSel = selTrack === det.track_id;
+            const isHov = hoveredTrack === det.track_id;
+            if (showTrajectories || isSel || isHov) {
+              const trkId = det.track_id;
+              const points: [number, number][] = [];
+              if (isLiveStreamingRef.current) {
+                for (let f = Math.max(0, currentVidFrame - 40); f <= currentVidFrame; f += 2) {
+                  const fDets = rtFrameBufferRef.current.get(f);
+                  const inst = fDets?.find((d: any) => d.track_id === trkId);
+                  if (inst) {
+                    points.push([(inst.rx + inst.rw / 2) * scaleX, (inst.ry + inst.rh / 2) * scaleY]);
+                  }
+                }
+              } else {
+                const trk = realTracks.find((t: any) => t.track_id === trkId);
+                if (trk?.trajectory && Array.isArray(trk.trajectory)) {
+                  trk.trajectory
+                    .filter((pt: any) => pt.frame <= currentVidFrame && pt.frame >= currentVidFrame - 45)
+                    .forEach((pt: any) => {
+                      const px = (pt.center_x ?? (pt.x + pt.w / 2)) * scaleX;
+                      const py = (pt.center_y ?? (pt.y + pt.h / 2)) * scaleY;
+                      points.push([px, py]);
+                    });
+                }
+              }
+
+              if (points.length >= 2) {
+                cx.save();
+                cx.strokeStyle = isSel ? '#F59E0B' : isHov ? '#38BDF8' : '#3B82F688';
+                cx.lineWidth = isSel ? 2.5 : 1.5;
+                cx.setLineDash(isSel ? [] : [3, 2]);
+                cx.beginPath();
+                points.forEach(([px, py], idx) => {
+                  if (idx === 0) cx.moveTo(px, py);
+                  else cx.lineTo(px, py);
+                });
+                cx.stroke();
+                cx.restore();
+              }
+            }
+          });
+        }
+
+        // --- 3. Bounding Boxes & Intelligent Badges ---
         const renderedBadges: { x: number, y: number, w: number, h: number }[] = [];
-        currentFrameDets.forEach(det => {
+        let labelCount = 0;
+
+        visibleDets.forEach(det => {
           const bx = Math.min(det.rx, det.rx + det.rw) * scaleX;
           const by = Math.min(det.ry, det.ry + det.rh) * scaleY;
           const bw = Math.max(18, Math.abs(det.rw) * scaleX);
@@ -769,86 +914,193 @@ export const WorkbenchView: React.FC = () => {
             det.speedStatus === 'CALCULATING...'
           );
           const isCalibReq = !hasValidSpeed && !isUncalibratedMotion && det.speedStatus === 'CALIBRATION_REQUIRED';
-          const isOutOfROI = !hasValidSpeed && !isUncalibratedMotion && det.speedStatus === 'OUT_OF_ROI';
-          const isUnstable = !hasValidSpeed && !isUncalibratedMotion && (det.speedStatus === 'CALIBRATION_UNSTABLE' || det.speedStatus === 'WORLD_COORDINATE_INVALID');
 
           // SPEEDING INTEGRITY: uncalibrated motion cannot trigger a confirmed speeding violation
           const bad = isCalibratedSpeed && det.speedKmh > speedLimit;
+          const isSelected = selTrack === det.track_id;
+          const isHovered = hoveredTrack === det.track_id;
 
-          // Box color:
-          // Red (#EF4444) strictly for confirmed calibrated speeding violations
-          // Green (#10B981) for confirmed calibrated compliant speeds
-          // Cyan (#0EA5E9) for uncalibrated relative motion
-          // Amber (#F59E0B) for calculating
-          // Slate (#64748B / #94A3B8) for calibration required / out of ROI
-          const col = bad ? '#EF4444'
+          const col = isSelected ? '#F59E0B'
+            : isHovered ? '#38BDF8'
+            : bad ? '#EF4444'
             : isCalibratedSpeed ? '#10B981'
             : isUncalibratedMotion ? '#0EA5E9'
             : isCalibReq ? '#64748B'
             : isCalculating ? '#F59E0B'
             : '#94A3B8';
-          const isSelected = selTrack === det.track_id;
 
-          cx.fillStyle = isSelected ? 'rgba(245, 158, 11, 0.22)' : (col + '28');
+          // Box interior
+          cx.fillStyle = isSelected ? 'rgba(245, 158, 11, 0.22)' : isHovered ? 'rgba(56, 189, 248, 0.20)' : (col + '20');
           cx.fillRect(bx, by, bw, bh);
 
+          // Box brackets
           const bracketLen = Math.min(12, Math.min(bw, bh) * 0.35);
-          cx.strokeStyle = isSelected ? '#F59E0B' : col; cx.lineWidth = isSelected ? 3 : 2;
+          cx.strokeStyle = col;
+          cx.lineWidth = (isSelected || isHovered) ? 2.5 : 1.5;
           cx.beginPath();
           cx.moveTo(bx, by + bracketLen); cx.lineTo(bx, by); cx.lineTo(bx + bracketLen, by);
           cx.moveTo(bx + bw - bracketLen, by); cx.lineTo(bx + bw, by); cx.lineTo(bx + bw, by + bracketLen);
           cx.moveTo(bx + bw, by + bh - bracketLen); cx.lineTo(bx + bw, by + bh); cx.lineTo(bx + bw - bracketLen, by + bh);
           cx.moveTo(bx + bracketLen, by + bh); cx.lineTo(bx, by + bh); cx.lineTo(bx, by + bh - bracketLen);
           cx.stroke();
-          cx.strokeStyle = isSelected ? '#F59E0B44' : (col + '44'); cx.lineWidth = 1;
+
+          // Subtle box border
+          cx.strokeStyle = col + '33';
+          cx.lineWidth = 1;
           cx.strokeRect(bx, by, bw, bh);
-          cx.fillStyle = isSelected ? '#F59E0B' : col; cx.beginPath();
-          cx.arc(bx + bw / 2, by + bh / 2, 2.5, 0, 2 * Math.PI); cx.fill();
 
-          // HUD Badge — SPEED INTEGRITY COMPLIANT OVERLAY DIRECTLY ON BOUNDING BOX
+          // Center target dot
+          cx.fillStyle = col;
+          cx.beginPath();
+          cx.arc(bx + bw / 2, by + bh / 2, (isSelected || isHovered) ? 3 : 2, 0, 2 * Math.PI);
+          cx.fill();
+
+          // --- 4. Intelligent Label Generation & Decluttering ---
+          // Rule: Selected or Hovered ALWAYS render detailed label.
+          // In MINIMAL mode: non-selected/non-hovered have NO labels.
+          // If labels toggled off: non-selected/non-hovered have NO labels.
+          // Density cap: maxLabels limits simultaneously rendered badges.
+          const shouldRenderBadge = isSelected || isHovered || (showLabels && vizMode !== 'MINIMAL' && labelCount < maxLabels);
+          if (!shouldRenderBadge) return;
+
           const clsLabel = (det.vehicle_class || 'Vehicle').toUpperCase();
-          let speedLabel = 'Calculating...';
-          if (isCalibratedSpeed) {
-            speedLabel = `${Math.round(det.speedKmh)} km/h`;
-          } else if (isUncalibratedMotion) {
-            speedLabel = 'Uncalibrated motion';
-          } else if (isCalibReq) {
-            speedLabel = 'Calib req';
-          } else if (isOutOfROI) {
-            speedLabel = 'Out of ROI';
-          } else if (isUnstable) {
-            speedLabel = 'Calib unstable';
-          } else if (isCalculating) {
-            speedLabel = 'Calculating...';
-          } else {
-            speedLabel = 'Speed unavailable';
-          }
+          let tx = '';
 
-          const tx = `${clsLabel} #${det.track_id} | ${speedLabel}`;
-          cx.font = 'bold 11px monospace, sans-serif';
-          const tw = cx.measureText(tx).width + 14;
-          const badgeX = Math.max(2, Math.min(W - tw - 2, bx + bw / 2 - tw / 2));
-          let badgeY = by >= 25 ? by - 22 : by + bh + 4;
-
-          // Collision resolution: prevent overlapping vehicle labels near top of video
-          for (const prev of renderedBadges) {
-            const overlapX = Math.abs(badgeX - prev.x) < Math.max(tw, prev.w) * 0.85;
-            const overlapY = Math.abs(badgeY - prev.y) < 18;
-            if (overlapX && overlapY) {
-              badgeY = (by >= 25 && prev.y < by) ? prev.y - 20 : prev.y + prev.h + 2;
+          if (isSelected || isHovered) {
+            const conf = Math.round((det.confidence || 0.9) * 100);
+            if (isCalibratedSpeed) {
+              tx = `${clsLabel} #${det.track_id} · ${conf}% · ${Math.round(det.speedKmh)} km/h`;
+            } else if (isUncalibratedMotion) {
+              tx = `${clsLabel} #${det.track_id} · ${conf}% · [UNCALIB]`;
+            } else {
+              tx = `${clsLabel} #${det.track_id} · ${conf}%`;
+            }
+          } else if (vizMode === 'STANDARD') {
+            // STANDARD: Compact object class & ID. Speed displayed only when calibrated & valid.
+            // Notice: No repetitive "Calib req" or "Speed unavailable" warnings on every single badge!
+            if (isCalibratedSpeed) {
+              tx = `${clsLabel} #${det.track_id} · ${Math.round(det.speedKmh)} km/h`;
+            } else {
+              tx = `${clsLabel} #${det.track_id}`;
+            }
+          } else if (vizMode === 'INTELLIGENCE') {
+            // INTELLIGENCE: Confidence, measurement information, event indicators
+            const conf = Math.round((det.confidence || 0.9) * 100);
+            if (isCalibratedSpeed) {
+              tx = `${clsLabel} #${det.track_id} · ${conf}% · ${Math.round(det.speedKmh)} km/h`;
+            } else if (isUncalibratedMotion) {
+              tx = `${clsLabel} #${det.track_id} · ${conf}% · [Motion]`;
+            } else {
+              tx = `${clsLabel} #${det.track_id} · ${conf}%`;
             }
           }
-          badgeY = Math.max(4, Math.min(H - 22, badgeY));
-          renderedBadges.push({ x: badgeX, y: badgeY, w: tw, h: 20 });
 
-          cx.fillStyle = '#0B0F19F2'; cx.strokeStyle = isSelected ? '#F59E0B' : col; cx.lineWidth = 1.5;
+          cx.font = (isSelected || isHovered) ? 'bold 11px monospace, sans-serif' : '10px monospace, sans-serif';
+          const tw = cx.measureText(tx).width + 12;
+          const badgeH = 18;
+          const badgeX = Math.max(2, Math.min(W - tw - 2, bx + bw / 2 - tw / 2));
+          let badgeY = by >= 22 ? by - 20 : by + bh + 4;
+
+          // Deterministic collision detection with already-rendered badges
+          let collides = false;
+          for (const prev of renderedBadges) {
+            const overlapX = Math.abs(badgeX - prev.x) < Math.max(tw, prev.w) * 0.88;
+            const overlapY = Math.abs(badgeY - prev.y) < (badgeH - 2);
+            if (overlapX && overlapY) {
+              collides = true;
+              break;
+            }
+          }
+
+          if (collides) {
+            const altY = (by >= 22 && badgeY === by - 20) ? (by + bh + 4) : (by >= 22 ? by - 20 : badgeY);
+            let altCollides = false;
+            for (const prev of renderedBadges) {
+              const overlapX = Math.abs(badgeX - prev.x) < Math.max(tw, prev.w) * 0.88;
+              const overlapY = Math.abs(altY - prev.y) < (badgeH - 2);
+              if (overlapX && overlapY) {
+                altCollides = true;
+                break;
+              }
+            }
+            if (!altCollides && altY >= 2 && altY + badgeH <= H - 2) {
+              badgeY = altY;
+              collides = false;
+            }
+          }
+
+          // If still colliding and NOT selected/hovered: suppress badge to maintain legibility
+          if (collides && !isSelected && !isHovered) {
+            return;
+          }
+
+          badgeY = Math.max(2, Math.min(H - badgeH - 2, badgeY));
+          renderedBadges.push({ x: badgeX, y: badgeY, w: tw, h: badgeH });
+          labelCount++;
+
+          // Draw Badge Background & Border
+          cx.fillStyle = '#0B0F19F2';
+          cx.strokeStyle = col;
+          cx.lineWidth = (isSelected || isHovered) ? 1.8 : 1.2;
           cx.beginPath();
-          if ((cx as any).roundRect) (cx as any).roundRect(badgeX, badgeY, tw, 20, 6);
-          else cx.rect(badgeX, badgeY, tw, 20);
+          if ((cx as any).roundRect) (cx as any).roundRect(badgeX, badgeY, tw, badgeH, 4);
+          else cx.rect(badgeX, badgeY, tw, badgeH);
           cx.fill(); cx.stroke();
-          cx.fillStyle = isSelected ? '#FBBF24' : (bad ? '#FCA5A5' : isCalibratedSpeed ? '#6EE7B7' : isUncalibratedMotion ? '#7DD3FC' : isCalculating ? '#FDE68A' : '#CBD5E1');
-          cx.textAlign = 'center'; cx.fillText(tx, badgeX + tw / 2, badgeY + 14);
+
+          cx.fillStyle = isSelected ? '#FBBF24'
+            : isHovered ? '#7DD3FC'
+            : bad ? '#FCA5A5'
+            : isCalibratedSpeed ? '#6EE7B7'
+            : isUncalibratedMotion ? '#7DD3FC'
+            : '#CBD5E1';
+          cx.textAlign = 'center';
+          cx.fillText(tx, badgeX + tw / 2, badgeY + 13);
         });
+
+        // --- 5. Selected / Hovered Floating Object HUD Card ---
+        const activeInspectorId = hoveredTrack ?? selTrack;
+        if (activeInspectorId !== null) {
+          const inspectedDet = currentFrameDets.find(d => d.track_id === activeInspectorId);
+          if (inspectedDet) {
+            const cardX = 12;
+            const cardY = H - 54;
+            const cardW = 340;
+            const cardH = 44;
+            cx.fillStyle = 'rgba(15, 23, 42, 0.92)';
+            cx.strokeStyle = hoveredTrack === activeInspectorId ? '#38BDF8' : '#F59E0B';
+            cx.lineWidth = 1.5;
+            cx.beginPath();
+            if ((cx as any).roundRect) (cx as any).roundRect(cardX, cardY, cardW, cardH, 6);
+            else cx.rect(cardX, cardY, cardW, cardH);
+            cx.fill(); cx.stroke();
+
+            const cls = (inspectedDet.vehicle_class || 'Vehicle').toUpperCase();
+            const spdText = (inspectedDet.speedKmh && inspectedDet.speedKmh > 0)
+              ? `${Math.round(inspectedDet.speedKmh)} km/h`
+              : inspectedDet.measurementState === 'UNCALIBRATED_MOTION'
+                ? 'Uncalibrated motion'
+                : 'Calibration required';
+            const stateColor = (inspectedDet.speedKmh && inspectedDet.speedKmh > 0)
+              ? '#10B981'
+              : inspectedDet.measurementState === 'UNCALIBRATED_MOTION'
+                ? '#0EA5E9'
+                : '#F59E0B';
+
+            cx.font = 'bold 11px sans-serif';
+            cx.fillStyle = hoveredTrack === activeInspectorId ? '#38BDF8' : '#F59E0B';
+            cx.textAlign = 'left';
+            cx.fillText(`TRACK #${activeInspectorId} [${cls}]`, cardX + 10, cardY + 17);
+
+            cx.font = '10px monospace, sans-serif';
+            cx.fillStyle = '#94A3B8';
+            cx.fillText(`Box: [${Math.round(inspectedDet.rx)}, ${Math.round(inspectedDet.ry)}, ${Math.round(inspectedDet.rw)}x${Math.round(inspectedDet.rh)}] · Conf: ${Math.round((inspectedDet.confidence || 0.9) * 100)}%`, cardX + 10, cardY + 34);
+
+            cx.font = 'bold 11px sans-serif';
+            cx.fillStyle = stateColor;
+            cx.textAlign = 'right';
+            cx.fillText(spdText, cardX + cardW - 10, cardY + 22);
+          }
+        }
       }
 
       // LIVE indicator badge (top right corner) — Live AI Telemetry HUD
@@ -902,14 +1154,18 @@ export const WorkbenchView: React.FC = () => {
         const col = bad ? '#EF4444' : '#10B981'; const x = s.x - s.bw / 2; const y = s.y - s.bh;
         cx.fillStyle = { Truck: '#475569', SUV: '#1E293B', Sedan: '#64748B', Motorcycle: '#7C3AED' }[a.cls as string] || '#64748B';
         cx.fillRect(x, y, s.bw, s.bh);
-        cx.strokeStyle = '#4F46E5'; cx.lineWidth = 1; cx.setLineDash([4, 3]);
-        cx.beginPath(); for (let k = 0; k <= 14; k++) { const q = state(a, (frame - k * 3) / FPS); k ? cx.lineTo(q.x, q.y) : cx.moveTo(q.x, q.y); } cx.stroke(); cx.setLineDash([]);
+        if (showTrajectories || vizMode === 'INTELLIGENCE') {
+          cx.strokeStyle = '#4F46E5'; cx.lineWidth = 1; cx.setLineDash([4, 3]);
+          cx.beginPath(); for (let k = 0; k <= 14; k++) { const q = state(a, (frame - k * 3) / FPS); k ? cx.lineTo(q.x, q.y) : cx.moveTo(q.x, q.y); } cx.stroke(); cx.setLineDash([]);
+        }
         cx.strokeStyle = selTrack === a.id ? '#F59E0B' : col; cx.lineWidth = selTrack === a.id ? 3 : 2;
         cx.strokeRect(x - 2, y - 2, s.bw + 4, s.bh + 4);
-        const tx = Math.round(v) + ' km/h'; const fs = Math.max(9, 11 + s.s * 6); cx.font = 'bold ' + fs + 'px sans-serif';
-        const tw = cx.measureText(tx).width + 10; cx.fillStyle = col; cx.beginPath();
-        if ((cx as any).roundRect) (cx as any).roundRect(s.x - tw / 2, y - fs - 10, tw, fs + 5, 9); else cx.rect(s.x - tw / 2, y - fs - 10, tw, fs + 5);
-        cx.fill(); cx.fillStyle = '#fff'; cx.textAlign = 'center'; cx.fillText(tx, s.x, y - 6);
+        if (showLabels && (vizMode !== 'MINIMAL' || selTrack === a.id || hoveredTrack === a.id)) {
+          const tx = Math.round(v) + ' km/h'; const fs = Math.max(9, 11 + s.s * 6); cx.font = 'bold ' + fs + 'px sans-serif';
+          const tw = cx.measureText(tx).width + 10; cx.fillStyle = col; cx.beginPath();
+          if ((cx as any).roundRect) (cx as any).roundRect(s.x - tw / 2, y - fs - 10, tw, fs + 5, 9); else cx.rect(s.x - tw / 2, y - fs - 10, tw, fs + 5);
+          cx.fill(); cx.fillStyle = '#fff'; cx.textAlign = 'center'; cx.fillText(tx, s.x, y - 6);
+        }
         if (bad && !seenRef.current.has(a.id) && s.d < 70) { seenRef.current.add(a.id); setViolations(prev => [{ t, id: a.id, v, loc: 'Lane ' + ((a.lx / 4 + 0.5) | 0) + ' · km 12.4' }, ...prev.slice(0, 29)]); }
       });
 
@@ -922,7 +1178,12 @@ export const WorkbenchView: React.FC = () => {
       cx.fill(); cx.stroke();
       cx.fillStyle = '#FCD34D'; cx.textAlign = 'right'; cx.fillText(demoBadge, W - 14, 22);
     }
-  }, [frame, speedLimit, selTrack, isRealVideo, realTracks, telemetry, realCalib, latestInferenceFrame, processingFps, activeJobId]);
+  }, [
+    frame, speedLimit, selTrack, hoveredTrack, isRealVideo, realTracks, telemetry,
+    realCalib, latestInferenceFrame, processingFps, activeJobId,
+    vizMode, showLabels, showTrajectories, classFilter, minConfidence,
+    focusSelected, maxLabels
+  ]);
 
   // =========================================================================
   // Handle File Upload
@@ -965,6 +1226,19 @@ export const WorkbenchView: React.FC = () => {
     setJobStatusText('Video loaded — Uploading for AI analysis...');
 
     setPipelineStage('UPLOADING');
+    if (activeJobIdRef.current) {
+      fetch(apiUrl(`/api/v1/jobs/${activeJobIdRef.current}/cancel`), { method: 'POST' }).catch(() => {});
+    }
+    rtFrameBufferRef.current.clear();
+    frameMapRef.current.clear();
+    setRealTracks([]);
+    setViolations([]);
+    setSelTrack(null);
+    setLatestInferenceFrame(null);
+    setLiveTrackCount(0);
+    seenRef.current.clear();
+    lastRenderedFrameIdRef.current = -1;
+
     const formData = new FormData();
     formData.append('file', file);
 
@@ -1020,8 +1294,64 @@ export const WorkbenchView: React.FC = () => {
   };
 
   // =========================================================================
-  // Canvas Click Handler
+  // Canvas Mouse and Click Handlers (Requirement #2: Hover & Selection)
   // =========================================================================
+  const handleCanvasMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const cv = canvasRef.current;
+    if (!cv) return;
+    const r = cv.getBoundingClientRect();
+    const x = ((e.clientX - r.left) * W) / r.width;
+    const y = ((e.clientY - r.top) * H) / r.height;
+
+    let hitTrk: number | null = null;
+    if (isRealVideoRef.current) {
+      const vidElem = videoRef.current;
+      if (!vidElem) return;
+      const srcW = vidElem.videoWidth || telemetry?.source_width || 1920;
+      const srcH = vidElem.videoHeight || telemetry?.source_height || 1080;
+      const scaleX = W / srcW;
+      const scaleY = H / srcH;
+      const videoFps = telemetry?.video_fps || 29.97;
+      const currentVidFrame = Math.floor(vidElem.currentTime * videoFps);
+
+      const frameDets = isLiveStreamingRef.current
+        ? (rtFrameBufferRef.current.get(currentVidFrame) || [])
+        : (frameMapRef.current.get(currentVidFrame) || []);
+
+      for (const det of frameDets) {
+        const bx = Math.min(det.rx, det.rx + det.rw) * scaleX;
+        const by = Math.min(det.ry, det.ry + det.rh) * scaleY;
+        const bw = Math.max(18, Math.abs(det.rw) * scaleX);
+        const bh = Math.max(16, Math.abs(det.rh) * scaleY);
+        if (x >= bx - 6 && x <= bx + bw + 6 && y >= by - 6 && y <= by + bh + 6) {
+          hitTrk = det.track_id;
+          break;
+        }
+      }
+    } else {
+      const t = frame / FPS;
+      for (const a of V) {
+        const s = state(a, t);
+        if (s.d > 6 && s.d < 125 && x > s.x - s.bw / 2 - 4 && x < s.x + s.bw / 2 + 4 && y > s.y - s.bh - 4 && y < s.y + 4) {
+          hitTrk = a.id;
+          break;
+        }
+      }
+    }
+
+    if (hoveredTrackRef.current !== hitTrk) {
+      hoveredTrackRef.current = hitTrk;
+      setHoveredTrack(hitTrk);
+    }
+  };
+
+  const handleCanvasMouseLeave = () => {
+    if (hoveredTrackRef.current !== null) {
+      hoveredTrackRef.current = null;
+      setHoveredTrack(null);
+    }
+  };
+
   const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const cv = canvasRef.current;
     if (!cv) return;
@@ -1045,11 +1375,19 @@ export const WorkbenchView: React.FC = () => {
 
       let hitTrk: number | null = null;
       frameDets.forEach(det => {
-        const bx = det.rx * scaleX; const by = det.ry * scaleY;
-        const bw = Math.max(15, det.rw * scaleX); const bh = Math.max(12, det.rh * scaleY);
-        if (x >= bx - 10 && x <= bx + bw + 10 && y >= by - 10 && y <= by + bh + 10) hitTrk = det.track_id;
+        const bx = Math.min(det.rx, det.rx + det.rw) * scaleX;
+        const by = Math.min(det.ry, det.ry + det.rh) * scaleY;
+        const bw = Math.max(18, Math.abs(det.rw) * scaleX);
+        const bh = Math.max(16, Math.abs(det.rh) * scaleY);
+        if (x >= bx - 8 && x <= bx + bw + 8 && y >= by - 8 && y <= by + bh + 8) hitTrk = det.track_id;
       });
-      if (hitTrk !== null) { setSelTrack(hitTrk); setPlaying(false); }
+      if (hitTrk !== null) {
+        setSelTrack(hitTrk);
+        setPlaying(false);
+      } else {
+        setSelTrack(null);
+        setFocusSelected(false);
+      }
     } else {
       const t = frame / FPS;
       let hit: number | null = null;
@@ -1057,7 +1395,13 @@ export const WorkbenchView: React.FC = () => {
         const s = state(a, t);
         if (s.d > 6 && s.d < 125 && x > s.x - s.bw / 2 - 4 && x < s.x + s.bw / 2 + 4 && y > s.y - s.bh - 4 && y < s.y + 4) hit = a.id;
       });
-      if (hit) { setSelTrack(hit); setPlaying(false); }
+      if (hit) {
+        setSelTrack(hit);
+        setPlaying(false);
+      } else {
+        setSelTrack(null);
+        setFocusSelected(false);
+      }
     }
   };
 
@@ -1677,7 +2021,163 @@ export const WorkbenchView: React.FC = () => {
               zIndex: -1
             }}
           />
-          <canvas ref={canvasRef} width={W} height={H} onClick={handleCanvasClick} style={{ cursor: 'pointer', display: 'block', borderRadius: 6 }} />
+          {/* Crowded-Scene Intelligent Visualization Toolbar (Requirement #2) */}
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            flexWrap: 'wrap',
+            gap: '8px',
+            marginBottom: '8px',
+            padding: '6px 12px',
+            background: '#0F172A',
+            borderRadius: '6px',
+            border: '1px solid #1E293B',
+            color: '#F8FAFC',
+            fontSize: '11px'
+          }}>
+            {/* Mode Selector */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <span style={{ color: '#94A3B8', fontWeight: 700 }}>VIZ MODE:</span>
+              {(['MINIMAL', 'STANDARD', 'INTELLIGENCE'] as const).map(m => (
+                <button
+                  key={m}
+                  onClick={() => setVizMode(m)}
+                  style={{
+                    background: vizMode === m ? '#4F46E5' : '#1E293B',
+                    color: vizMode === m ? '#FFFFFF' : '#94A3B8',
+                    border: `1px solid ${vizMode === m ? '#6366F1' : '#334155'}`,
+                    borderRadius: '4px',
+                    padding: '3px 8px',
+                    fontSize: '10px',
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                    transition: 'all 0.15s ease'
+                  }}
+                  title={m === 'MINIMAL' ? 'Boxes only (labels on hover/select)' : m === 'STANDARD' ? 'Compact class and ID (speed only if calibrated)' : 'Full measurements, confidence, and trajectories'}
+                >
+                  {m}
+                </button>
+              ))}
+            </div>
+
+            {/* Quick Toggles */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={showLabels}
+                  onChange={e => setShowLabels(e.target.checked)}
+                />
+                <span style={{ color: showLabels ? '#E2E8F0' : '#64748B' }}>Labels</span>
+              </label>
+
+              <label style={{ display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={showTrajectories}
+                  onChange={e => setShowTrajectories(e.target.checked)}
+                />
+                <span style={{ color: showTrajectories ? '#E2E8F0' : '#64748B' }}>Trails</span>
+              </label>
+
+              {selTrack !== null && (
+                <button
+                  onClick={() => setFocusSelected(!focusSelected)}
+                  style={{
+                    background: focusSelected ? '#F59E0B' : '#1E293B',
+                    color: focusSelected ? '#000000' : '#F59E0B',
+                    border: '1px solid #F59E0B',
+                    borderRadius: '4px',
+                    padding: '2px 7px',
+                    fontSize: '10px',
+                    fontWeight: 700,
+                    cursor: 'pointer'
+                  }}
+                  title="Isolate selected track"
+                >
+                  {focusSelected ? `Focus: #${selTrack} (Active)` : `Focus: #${selTrack}`}
+                </button>
+              )}
+            </div>
+
+            {/* Filters: Class, Confidence, Density */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                <span style={{ color: '#94A3B8' }}>Class:</span>
+                <select
+                  value={classFilter}
+                  onChange={e => setClassFilter(e.target.value as any)}
+                  style={{
+                    background: '#1E293B',
+                    color: '#F8FAFC',
+                    border: '1px solid #334155',
+                    borderRadius: '4px',
+                    padding: '2px 4px',
+                    fontSize: '10px'
+                  }}
+                >
+                  <option value="ALL">All Classes</option>
+                  <option value="CAR">Cars</option>
+                  <option value="TRUCK">Trucks</option>
+                  <option value="BUS">Buses</option>
+                  <option value="MOTORCYCLE">Motorcycles</option>
+                </select>
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                <span style={{ color: '#94A3B8' }}>Min Conf:</span>
+                <select
+                  value={minConfidence}
+                  onChange={e => setMinConfidence(Number(e.target.value))}
+                  style={{
+                    background: '#1E293B',
+                    color: '#F8FAFC',
+                    border: '1px solid #334155',
+                    borderRadius: '4px',
+                    padding: '2px 4px',
+                    fontSize: '10px'
+                  }}
+                >
+                  <option value={0.15}>&gt; 15%</option>
+                  <option value={0.25}>&gt; 25%</option>
+                  <option value={0.50}>&gt; 50%</option>
+                  <option value={0.75}>&gt; 75%</option>
+                </select>
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                <span style={{ color: '#94A3B8' }}>Max Badges:</span>
+                <select
+                  value={maxLabels}
+                  onChange={e => setMaxLabels(Number(e.target.value))}
+                  style={{
+                    background: '#1E293B',
+                    color: '#F8FAFC',
+                    border: '1px solid #334155',
+                    borderRadius: '4px',
+                    padding: '2px 4px',
+                    fontSize: '10px'
+                  }}
+                >
+                  <option value={8}>8 max</option>
+                  <option value={14}>14 max</option>
+                  <option value={24}>24 max</option>
+                  <option value={999}>All</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <canvas
+            ref={canvasRef}
+            width={W}
+            height={H}
+            onClick={handleCanvasClick}
+            onMouseMove={handleCanvasMouseMove}
+            onMouseLeave={handleCanvasMouseLeave}
+            style={{ cursor: 'pointer', display: 'block', borderRadius: 6 }}
+          />
 
           {/* Pipeline Progress Status */}
           {renderPipelineStatus()}
@@ -1796,125 +2296,171 @@ export const WorkbenchView: React.FC = () => {
             </table>
           </div>
         </div>
-        {/* Phase 22: Synchronized Vehicle Speed Intelligence Table */}
-        <div className="card" style={{ marginTop: '16px' }}>
-          <h3 style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span>Vehicle Speed Intelligence</span>
-            <span className="badge" style={{ background: '#0F172A', color: '#10B981', fontWeight: 700 }}>
-              {getVehicleTableData().length} VEHICLES LOGGED
-            </span>
-          </h3>
+        {/* Phase 22: Synchronized Vehicle Speed Intelligence Table with Scalability Pagination */}
+        {(() => {
+          const allTableData = getVehicleTableData();
+          const totalTablePages = Math.max(1, Math.ceil(allTableData.length / TABLE_PAGE_SIZE));
+          const currentTablePage = Math.min(tablePage, totalTablePages);
+          const paginatedRows = allTableData.slice((currentTablePage - 1) * TABLE_PAGE_SIZE, currentTablePage * TABLE_PAGE_SIZE);
 
-          <div style={{ maxHeight: '280px', overflowY: 'auto', marginTop: '10px' }}>
-            <table style={{ width: '100%', fontSize: '12px', borderCollapse: 'collapse' }}>
-              <thead>
-                <tr style={{ borderBottom: '1px solid #E2E8F0', color: '#64748B', textAlign: 'left', height: '32px' }}>
-                  <th style={{ padding: '6px 8px' }}>TRACK ID</th>
-                  <th style={{ padding: '6px 8px' }}>CLASS</th>
-                  <th style={{ padding: '6px 8px' }}>CURRENT SPEED</th>
-                  <th style={{ padding: '6px 8px' }}>AVG SPEED</th>
-                  <th style={{ padding: '6px 8px' }}>MAX SPEED</th>
-                  <th style={{ padding: '6px 8px' }}>TRACK STATUS</th>
-                  <th style={{ padding: '6px 8px' }}>CALIBRATION</th>
-                  <th style={{ padding: '6px 8px' }}>VALIDITY</th>
-                  <th style={{ padding: '6px 8px', textAlign: 'right' }}>ACTION</th>
-                </tr>
-              </thead>
-              <tbody>
-                {getVehicleTableData().length === 0 ? (
-                  <tr>
-                    <td colSpan={9} style={{ textAlign: 'center', padding: '24px', color: '#94A3B8' }}>
-                      No tracked vehicles active in current scene.
-                    </td>
-                  </tr>
-                ) : (
-                  getVehicleTableData().map((row: any) => {
-                    const isSelected = selTrack === row.track_id;
-                    const hasValidSpeed = row.isCalibrated && row.current_speed_raw !== null && row.current_speed_raw > 0;
-                    const isSpeeding = hasValidSpeed && row.current_speed_raw > speedLimit;
-                    const isUncalibrated = row.measurement_state === 'UNCALIBRATED_MOTION';
+          return (
+            <div className="card" style={{ marginTop: '16px' }}>
+              <h3 style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span>Vehicle Speed Intelligence</span>
+                <span className="badge" style={{ background: '#0F172A', color: '#10B981', fontWeight: 700 }}>
+                  {allTableData.length} VEHICLES LOGGED · PAGE {currentTablePage}/{totalTablePages}
+                </span>
+              </h3>
 
-                    return (
-                      <tr
-                        key={row.track_id}
-                        onClick={() => { setSelTrack(row.track_id); setPlaying(false); }}
-                        style={{
-                          borderBottom: '1px solid #F1F5F9',
-                          background: isSelected ? '#FEF3C7' : 'transparent',
-                          cursor: 'pointer',
-                          transition: 'background 0.15s'
-                        }}
-                      >
-                        <td style={{ padding: '8px', fontWeight: 700, color: '#1E293B' }}>
-                          #{row.track_id}
-                        </td>
-                        <td style={{ padding: '8px' }}>
-                          <span className="badge" style={{ fontSize: '10px' }}>{row.vehicle_class}</span>
-                        </td>
-                        <td style={{
-                          padding: '8px',
-                          fontWeight: 700,
-                          color: isSpeeding ? '#EF4444' : hasValidSpeed ? '#10B981' : isUncalibrated ? '#0EA5E9' : '#64748B'
-                        }}>
-                          {row.current_speed}
-                        </td>
-                        <td style={{ padding: '8px', color: '#334155' }}>
-                          {row.avg_speed}
-                        </td>
-                        <td style={{ padding: '8px', color: '#334155' }}>
-                          {row.max_speed}
-                        </td>
-                        <td style={{ padding: '8px' }}>
-                          <span style={{
-                            fontSize: '10px',
-                            fontWeight: 700,
-                            padding: '2px 6px',
-                            borderRadius: '4px',
-                            background: row.track_status === 'ACTIVE' || row.track_status === 'IN FRAME' ? '#DCFCE7' : '#F1F5F9',
-                            color: row.track_status === 'ACTIVE' || row.track_status === 'IN FRAME' ? '#166534' : '#475569'
-                          }}>
-                            {row.track_status}
-                          </span>
-                        </td>
-                        <td style={{ padding: '8px' }}>
-                          <span style={{
-                            fontSize: '10px',
-                            fontWeight: 600,
-                            color: row.calibration_status === 'CALIBRATED' || row.calibration_status === 'SYNTHETIC' ? '#2563EB' : '#D97706'
-                          }}>
-                            {row.calibration_status}
-                          </span>
-                        </td>
-                        <td style={{ padding: '8px' }}>
-                          <span style={{
-                            fontSize: '10px',
-                            fontWeight: 600,
-                            color: row.measurement_state === 'CALIBRATED_SPEED' ? '#10B981' : row.measurement_state === 'UNCALIBRATED_MOTION' ? '#0EA5E9' : '#D97706'
-                          }}>
-                            {row.validity}
-                          </span>
-                        </td>
-                        <td style={{ padding: '8px', textAlign: 'right' }}>
-                          <button
-                            className="b g"
-                            style={{ padding: '2px 8px', fontSize: '11px' }}
-                            onClick={(ev) => {
-                              ev.stopPropagation();
-                              setSelTrack(row.track_id);
-                              setPlaying(false);
-                            }}
-                          >
-                            Inspect
-                          </button>
+              <div style={{ maxHeight: '320px', overflowY: 'auto', marginTop: '10px' }}>
+                <table style={{ width: '100%', fontSize: '12px', borderCollapse: 'collapse' }}>
+                  <thead>
+                    <tr style={{ borderBottom: '1px solid #E2E8F0', color: '#64748B', textAlign: 'left', height: '32px' }}>
+                      <th style={{ padding: '6px 8px' }}>TRACK ID</th>
+                      <th style={{ padding: '6px 8px' }}>CLASS</th>
+                      <th style={{ padding: '6px 8px' }}>CURRENT SPEED</th>
+                      <th style={{ padding: '6px 8px' }}>AVG SPEED</th>
+                      <th style={{ padding: '6px 8px' }}>MAX SPEED</th>
+                      <th style={{ padding: '6px 8px' }}>TRACK STATUS</th>
+                      <th style={{ padding: '6px 8px' }}>CALIBRATION</th>
+                      <th style={{ padding: '6px 8px' }}>VALIDITY</th>
+                      <th style={{ padding: '6px 8px', textAlign: 'right' }}>ACTION</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {paginatedRows.length === 0 ? (
+                      <tr>
+                        <td colSpan={9} style={{ textAlign: 'center', padding: '24px', color: '#94A3B8' }}>
+                          No tracked vehicles active in current scene.
                         </td>
                       </tr>
-                    );
-                  })
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
+                    ) : (
+                      paginatedRows.map((row: any) => {
+                        const isSelected = selTrack === row.track_id;
+                        const hasValidSpeed = row.isCalibrated && row.current_speed_raw !== null && row.current_speed_raw > 0;
+                        const isSpeeding = hasValidSpeed && row.current_speed_raw > speedLimit;
+                        const isUncalibrated = row.measurement_state === 'UNCALIBRATED_MOTION';
+
+                        return (
+                          <tr
+                            key={row.track_id}
+                            onClick={() => { setSelTrack(row.track_id); setPlaying(false); }}
+                            style={{
+                              borderBottom: '1px solid #F1F5F9',
+                              background: isSelected ? '#FEF3C7' : 'transparent',
+                              cursor: 'pointer',
+                              transition: 'background 0.15s'
+                            }}
+                          >
+                            <td style={{ padding: '8px', fontWeight: 700, color: '#1E293B' }}>
+                              #{row.track_id}
+                            </td>
+                            <td style={{ padding: '8px' }}>
+                              <span className="badge" style={{ fontSize: '10px' }}>{row.vehicle_class}</span>
+                            </td>
+                            <td style={{
+                              padding: '8px',
+                              fontWeight: 700,
+                              color: isSpeeding ? '#EF4444' : hasValidSpeed ? '#10B981' : isUncalibrated ? '#0EA5E9' : '#64748B'
+                            }}>
+                              {row.current_speed}
+                            </td>
+                            <td style={{ padding: '8px', color: '#334155' }}>
+                              {row.avg_speed}
+                            </td>
+                            <td style={{ padding: '8px', color: '#334155' }}>
+                              {row.max_speed}
+                            </td>
+                            <td style={{ padding: '8px' }}>
+                              <span style={{
+                                fontSize: '10px',
+                                fontWeight: 700,
+                                padding: '2px 6px',
+                                borderRadius: '4px',
+                                background: row.track_status === 'ACTIVE' || row.track_status === 'IN FRAME' ? '#DCFCE7' : '#F1F5F9',
+                                color: row.track_status === 'ACTIVE' || row.track_status === 'IN FRAME' ? '#166534' : '#475569'
+                              }}>
+                                {row.track_status}
+                              </span>
+                            </td>
+                            <td style={{ padding: '8px' }}>
+                              <span style={{
+                                fontSize: '10px',
+                                fontWeight: 600,
+                                color: row.calibration_status === 'CALIBRATED' || row.calibration_status === 'SYNTHETIC' ? '#2563EB' : '#D97706'
+                              }}>
+                                {row.calibration_status}
+                              </span>
+                            </td>
+                            <td style={{ padding: '8px' }}>
+                              <span style={{
+                                fontSize: '10px',
+                                fontWeight: 600,
+                                color: row.measurement_state === 'CALIBRATED_SPEED' ? '#10B981' : row.measurement_state === 'UNCALIBRATED_MOTION' ? '#0EA5E9' : '#D97706'
+                              }}>
+                                {row.validity}
+                              </span>
+                            </td>
+                            <td style={{ padding: '8px', textAlign: 'right' }}>
+                              <button
+                                className="b g"
+                                style={{ padding: '2px 8px', fontSize: '11px' }}
+                                onClick={(ev) => {
+                                  ev.stopPropagation();
+                                  setSelTrack(row.track_id);
+                                  setPlaying(false);
+                                }}
+                              >
+                                Inspect
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Scalability Pagination Controls (Requirement #6) */}
+              {allTableData.length > 0 && (
+                <div style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  padding: '8px 12px',
+                  borderTop: '1px solid #E2E8F0',
+                  fontSize: '11px',
+                  color: '#64748B',
+                  marginTop: '6px'
+                }}>
+                  <div>
+                    Showing <b>{(currentTablePage - 1) * TABLE_PAGE_SIZE + 1}</b>–<b>{Math.min(currentTablePage * TABLE_PAGE_SIZE, allTableData.length)}</b> of <b>{allTableData.length}</b> vehicles
+                  </div>
+                  <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                    <button
+                      className="b g"
+                      style={{ padding: '3px 8px', fontSize: '11px' }}
+                      disabled={currentTablePage <= 1}
+                      onClick={() => setTablePage(p => Math.max(1, p - 1))}
+                    >
+                      ◀ Prev
+                    </button>
+                    <span>Page <b>{currentTablePage}</b> of <b>{totalTablePages}</b></span>
+                    <button
+                      className="b g"
+                      style={{ padding: '3px 8px', fontSize: '11px' }}
+                      disabled={currentTablePage >= totalTablePages}
+                      onClick={() => setTablePage(p => Math.min(totalTablePages, p + 1))}
+                    >
+                      Next ▶
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })()}
 
       </div>
 

@@ -21,7 +21,10 @@ from visionradar.models.init_db import create_tables
 from visionradar.models.entities import Project, Video, Calibration, ProcessingJob, Track, SpeedMeasurement, Violation, Evidence, Experiment
 from visionradar.cv.calibration import HomographyCalibrator
 from visionradar.cv.analytics import TrafficAnalyticsEngine
-from visionradar.worker.job_worker import run_job, run_job_streaming, get_or_create_queue, drop_job_queue, cleanup_stale_job_queues
+from visionradar.worker.job_worker import (
+    run_job, run_job_streaming, get_or_create_queue, drop_job_queue, cleanup_stale_job_queues,
+    cancel_job, cancel_all_active_jobs, is_job_cancelled
+)
 from visionradar.services.pdf_report import PDFReportGenerator
 from apps.api.schemas import (
     ProjectCreate, ProjectResponse,
@@ -340,6 +343,9 @@ async def start_processing_job(video_id: int, payload: JobCreate, background_tas
     db.commit()
     db.refresh(job)
 
+    # Phase 22.3: Gracefully cancel prior running jobs so worker threads do not pile up on CPU
+    cancel_all_active_jobs()
+
     # Capture the current event loop and register the queue BEFORE the thread starts
     # so the WebSocket handler can find it even if it connects immediately.
     loop = asyncio.get_event_loop()
@@ -365,6 +371,40 @@ async def start_processing_job(video_id: int, payload: JobCreate, background_tas
         started_at=job.started_at,
         completed_at=job.completed_at
     )
+
+
+@app.post("/api/v1/jobs/{job_id}/cancel", response_model=JobResponse)
+def cancel_processing_job(job_id: int, db: Session = Depends(get_db)):
+    """Cancel an ongoing processing job safely and release worker resources."""
+    job = db.query(ProcessingJob).filter(ProcessingJob.id == job_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    if job.status not in ("SUCCEEDED", "FAILED", "CANCELLED"):
+        cancel_job(job_id)
+        job.status = "CANCELLED"
+        job.stage = "Cancelled"
+        import datetime
+        job.completed_at = datetime.datetime.now(datetime.timezone.utc)
+        job.error_message = "Cancelled by user request"
+        db.commit()
+        db.refresh(job)
+        drop_job_queue(job_id)
+
+    return JobResponse(
+        id=job.id,
+        video_id=job.video_id,
+        calibration_id=job.calibration_id,
+        status=job.status,
+        stage=job.stage,
+        progress_pct=job.progress_pct,
+        error_message=job.error_message,
+        telemetry=job.telemetry_json,
+        created_at=job.created_at,
+        started_at=job.started_at,
+        completed_at=job.completed_at
+    )
+
 
 
 # ---------------------------------------------------------------------------
@@ -412,11 +452,22 @@ async def websocket_job_stream(websocket: WebSocket, job_id: int):
             await websocket.close()
             return
 
+        if job.status == "CANCELLED":
+            await websocket.send_json({
+                "type": "error",
+                "job_id": job_id,
+                "message": "Job was cancelled."
+            })
+            await websocket.close()
+            return
+
         # Get or create the queue for this job
         loop = asyncio.get_event_loop()
         queue = get_or_create_queue(job_id, loop)
 
         while True:
+            if is_job_cancelled(job_id):
+                break
             try:
                 # Wait for next message with a 30-second timeout
                 msg = await asyncio.wait_for(queue.get(), timeout=30.0)
@@ -428,6 +479,8 @@ async def websocket_job_stream(websocket: WebSocket, job_id: int):
                     break
 
             except asyncio.TimeoutError:
+                if is_job_cancelled(job_id):
+                    break
                 # Send a keepalive ping so the browser doesn't close the WS
                 try:
                     await websocket.send_json({"type": "ping", "job_id": job_id})
@@ -444,7 +497,7 @@ async def websocket_job_stream(websocket: WebSocket, job_id: int):
     finally:
         try:
             db.refresh(job)
-            if job.status in ("SUCCEEDED", "FAILED"):
+            if job.status in ("SUCCEEDED", "FAILED", "CANCELLED"):
                 drop_job_queue(job_id)
             cleanup_stale_job_queues()
         except Exception:
@@ -1132,6 +1185,17 @@ def generate_pdf_report(job_id: int, db: Session = Depends(get_db)):
         "pdf_url": f"/static/reports/{pdf_filename}",
         "filename": pdf_filename
     }
+
+# SPA Client Route Fallback
+if os.path.exists(web_dist_dir):
+    @app.get("/{full_path:path}")
+    def serve_spa_fallback(full_path: str):
+        if full_path.startswith("api/") or full_path.startswith("static/") or full_path.startswith("assets/"):
+            raise HTTPException(status_code=404, detail="Resource not found")
+        index_file = os.path.join(web_dist_dir, "index.html")
+        if os.path.exists(index_file):
+            return FileResponse(index_file)
+        raise HTTPException(status_code=404, detail="SPA index not found")
 
 if __name__ == "__main__":
     import uvicorn

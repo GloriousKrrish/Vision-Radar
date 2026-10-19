@@ -37,4 +37,11 @@ Thumbs.db
 DATASETS/
 # Binaries
 cloudflared.exe
+data/models/*_int8.onnx
+data/debug/
+data/violations/
+data/dataset_audit_temp.json
+scratch_check_job.py
+*.docx
+~$*
 

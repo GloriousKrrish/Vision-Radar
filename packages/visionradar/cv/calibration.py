@@ -58,23 +58,36 @@ class HomographyCalibrator:
         H_inv = np.linalg.inv(H)
         return H, H_inv
 
-    def image_to_world(self, u: float, v: float, source_width: float = 1920.0, source_height: float = 1080.0) -> Tuple[float, float]:
+    def _scale_coordinates(
+        self,
+        u: float,
+        v: float,
+        source_width: Optional[float] = None,
+        source_height: Optional[float] = None
+    ) -> Tuple[float, float]:
         """
-        Projects an image pixel point (u, v) onto the road plane (X, Y) in metric coordinates (meters).
-        Handles coordinate scaling if (u, v) is in 1920x1080 source space while image_points are in 800x450 canvas space.
+        Maps image coordinates (u, v) into the coordinate space of self.image_points.
+        When self.image_points are in canvas space (max_x <= 850.0) and source_width represents
+        full video resolution (source_width > 850.0), uniformly scales all coordinates.
+        Preserves coordinates when video resolution matches calibration space (source_width <= 850.0)
+        or when source dimensions are not provided.
         """
         pts = np.array(self.image_points, dtype=np.float32) if self.image_points else np.array([])
-        max_x = np.max(pts[:, 0]) if len(pts) > 0 else 1000.0
-        
-        # Scale (u, v) ONLY if (u, v) are in source pixel space while image_points are in 800x450 space
-        if max_x <= 850.0 and (u > 850.0 or v > 450.0):
-            sw = float(source_width) if source_width > 0 else 1920.0
-            sh = float(source_height) if source_height > 0 else 1080.0
-            test_u = u * (800.0 / sw)
-            test_v = v * (450.0 / sh)
-        else:
-            test_u = u
-            test_v = v
+        max_x = float(np.max(pts[:, 0])) if len(pts) > 0 else 1000.0
+
+        if source_width is not None and float(source_width) > 850.0 and max_x <= 850.0:
+            sw = float(source_width)
+            sh = float(source_height) if source_height is not None and float(source_height) > 0 else 1080.0
+            return float(u * (800.0 / sw)), float(v * (450.0 / sh))
+
+        return float(u), float(v)
+
+    def image_to_world(self, u: float, v: float, source_width: Optional[float] = None, source_height: Optional[float] = None) -> Tuple[float, float]:
+        """
+        Projects an image pixel point (u, v) onto the road plane (X, Y) in metric coordinates (meters).
+        Handles coordinate scaling if (u, v) is in source resolution while image_points are in 800x450 canvas space.
+        """
+        test_u, test_v = self._scale_coordinates(u, v, source_width, source_height)
 
         pt = np.array([test_u, test_v, 1.0], dtype=np.float64)
         res = self.H @ pt
@@ -88,8 +101,8 @@ class HomographyCalibrator:
         self,
         u: float,
         v: float,
-        source_width: float = 1920.0,
-        source_height: float = 1080.0
+        source_width: Optional[float] = None,
+        source_height: Optional[float] = None
     ) -> bool:
         """
         Tests whether pixel anchor (u, v) lies inside the calibrated road plane polygon.
@@ -100,16 +113,7 @@ class HomographyCalibrator:
             return True
 
         pts = np.array(self.image_points, dtype=np.float32)
-        max_x = np.max(pts[:, 0])
-
-        if max_x <= 850.0 and (u > 850.0 or v > 450.0):
-            sw = float(source_width) if source_width > 0 else 1920.0
-            sh = float(source_height) if source_height > 0 else 1080.0
-            test_u = u * (800.0 / sw)
-            test_v = v * (450.0 / sh)
-        else:
-            test_u = u
-            test_v = v
+        test_u, test_v = self._scale_coordinates(u, v, source_width, source_height)
 
         res = cv2.pointPolygonTest(pts, (float(test_u), float(test_v)), False)
         return res >= 0.0
@@ -118,24 +122,14 @@ class HomographyCalibrator:
         self,
         u: float,
         v: float,
-        source_width: float = 1920.0,
-        source_height: float = 1080.0
+        source_width: Optional[float] = None,
+        source_height: Optional[float] = None
     ) -> Tuple[bool, str]:
         """
         Checks numerical homography projection stability at pixel point (u, v).
         Tests denominator value and local spatial scale factor (m/px).
         """
-        pts = np.array(self.image_points, dtype=np.float32) if self.image_points else np.array([])
-        max_x = np.max(pts[:, 0]) if len(pts) > 0 else 1000.0
-        
-        if max_x <= 850.0 and (u > 850.0 or v > 450.0):
-            sw = float(source_width) if source_width > 0 else 1920.0
-            sh = float(source_height) if source_height > 0 else 1080.0
-            test_u = u * (800.0 / sw)
-            test_v = v * (450.0 / sh)
-        else:
-            test_u = u
-            test_v = v
+        test_u, test_v = self._scale_coordinates(u, v, source_width, source_height)
 
         pt = np.array([test_u, test_v, 1.0], dtype=np.float64)
         res = self.H @ pt

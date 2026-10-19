@@ -200,7 +200,7 @@ class MonocularSpeedEstimator:
 
         return segments
 
-    def project_trajectory(self, trajectory: VehicleTrajectory, source_width: float = 1920.0, source_height: float = 1080.0):
+    def project_trajectory(self, trajectory: VehicleTrajectory, source_width: Optional[float] = None, source_height: Optional[float] = None):
         """
         Projects trajectory anchor pixel points onto the calibrated road plane.
         Enforces ROI polygon membership and homography numerical stability.
@@ -246,8 +246,8 @@ class MonocularSpeedEstimator:
         trajectory: VehicleTrajectory,
         target_frame_idx: int,
         trajectory_quality: float = 1.0,
-        source_width: float = 1920.0,
-        source_height: float = 1080.0
+        source_width: Optional[float] = None,
+        source_height: Optional[float] = None
     ) -> SpeedEstimate:
         """
         Multi-Estimator Speed Engine (Phase 7E & Phase 8D Calibration Guard).

@@ -8,6 +8,7 @@ CV pipeline unchanged: YOLOX → ByteTrack → speed estimator.
 Only the delivery mechanism changes: results are pushed to
 a per-job asyncio Queue as soon as each frame is processed.
 """
+import threading
 import time
 import datetime
 import asyncio
@@ -18,7 +19,7 @@ import os
 import json
 import cv2
 import numpy as np
-from typing import Dict, Optional, Any
+from typing import Dict, Optional, Any, Set
 from sqlalchemy.orm import Session
 
 from visionradar.models.database import SessionLocal
@@ -41,6 +42,30 @@ from visionradar.cv.evidence import EvidenceWriter
 _JOB_QUEUES: Dict[int, asyncio.Queue] = {}
 _JOB_LOOP: Dict[int, asyncio.AbstractEventLoop] = {}   # event loop that owns each queue
 _JOB_COMPLETED_AT: Dict[int, float] = {}              # timestamp when job finished
+
+# Thread safety & job cancellation registry (Phase 22.3)
+_ACTIVE_JOBS: Set[int] = set()
+_CANCELLED_JOBS: Set[int] = set()
+_JOB_LOCK = threading.Lock()
+
+def cancel_job(job_id: int):
+    """Mark a specific job as cancelled."""
+    with _JOB_LOCK:
+        _CANCELLED_JOBS.add(job_id)
+    print(f"[JOB_WORKER] Job #{job_id} marked for cancellation.", flush=True)
+
+def cancel_all_active_jobs():
+    """Cancel all currently running worker jobs to prevent CPU starvation."""
+    with _JOB_LOCK:
+        for jid in list(_ACTIVE_JOBS):
+            _CANCELLED_JOBS.add(jid)
+    print(f"[JOB_WORKER] All active jobs marked for cancellation.", flush=True)
+
+def is_job_cancelled(job_id: int) -> bool:
+    """Check if job has received a cancellation signal."""
+    with _JOB_LOCK:
+        return job_id in _CANCELLED_JOBS
+
 
 # Maximum items waiting in each per-job queue.
 # 64 frames gives ~2.1s of buffer at 30fps before backpressure.
@@ -166,6 +191,10 @@ def run_job_streaming(job_id: int, loop: asyncio.AbstractEventLoop):
     # Register the queue so the WebSocket handler can consume
     get_or_create_queue(job_id, loop)
 
+    with _JOB_LOCK:
+        _ACTIVE_JOBS.add(job_id)
+        _CANCELLED_JOBS.discard(job_id)
+
     db: Session = SessionLocal()
     job = db.query(ProcessingJob).filter(ProcessingJob.id == job_id).first()
     if not job:
@@ -181,6 +210,7 @@ def run_job_streaming(job_id: int, loop: asyncio.AbstractEventLoop):
         "total_detector_ms": 0.0,
         "total_tracker_ms": 0.0,
     }
+    frame_ring_buffer: Dict[int, Any] = {}
 
     try:
         log_lifecycle(job_id, "JOB_STARTED")
@@ -227,6 +257,21 @@ def run_job_streaming(job_id: int, loop: asyncio.AbstractEventLoop):
         job.stage = "Detection & Tracking"
         job.progress_pct = 20.0
         db.commit()
+
+        if is_job_cancelled(job_id):
+            log_lifecycle(job_id, "JOB_CANCELLED", frame_index=0)
+            job.status = "CANCELLED"
+            job.stage = "Cancelled"
+            job.completed_at = datetime.datetime.now(datetime.timezone.utc)
+            job.error_message = "Job cancelled by user or superseded by new job."
+            db.commit()
+            _emit(job_id, {
+                "type": "error",
+                "job_id": job_id,
+                "message": "Job cancelled by user or superseded by new job."
+            })
+            _JOB_COMPLETED_AT[job_id] = time.time()
+            return
 
         from visionradar.cv.detection import get_detector
         from visionradar.intelligence.traffic import (
@@ -308,6 +353,21 @@ def run_job_streaming(job_id: int, loop: asyncio.AbstractEventLoop):
         # MAIN PROCESSING LOOP — emit per-frame results incrementally
         # ---------------------------------------------------------------
         for frame_idx, timestamp, frame in decoder.decode_frames():
+            if is_job_cancelled(job_id):
+                log_lifecycle(job_id, "JOB_CANCELLED", frame_index=frame_idx)
+                job.status = "CANCELLED"
+                job.stage = "Cancelled"
+                job.completed_at = datetime.datetime.now(datetime.timezone.utc)
+                job.error_message = "Job cancelled by user or superseded by new job."
+                db.commit()
+                _emit(job_id, {
+                    "type": "error",
+                    "job_id": job_id,
+                    "message": "Job cancelled by user or superseded by new job."
+                })
+                _JOB_COMPLETED_AT[job_id] = time.time()
+                return
+
             last_frame_idx = frame_idx
             last_timestamp = timestamp
             last_successful_stage = "DECODER"
@@ -315,11 +375,12 @@ def run_job_streaming(job_id: int, loop: asyncio.AbstractEventLoop):
             if frame_idx == 0 or frame_idx % 30 == 0:
                 log_lifecycle(job_id, "FRAME_DECODED", frame_index=frame_idx)
 
-            # Store a small thumbnail in the ring buffer (not the full BGR frame)
-            # to keep memory under control (320x180 @ 3ch ≈ 170 KB per frame vs 6 MB)
+            # Store JPEG-encoded bytes in the ring buffer to keep memory under control
+            # (~50 KB per frame vs 6.2 MB raw BGR array: reduces ring buffer from 560 MB to ~4.5 MB)
             try:
+                ret_enc, jpg_buf = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
                 thumb = cv2.resize(frame, (320, 180), interpolation=cv2.INTER_NEAREST)
-                frame_ring_buffer[frame_idx] = (frame, thumb)
+                frame_ring_buffer[frame_idx] = (jpg_buf if ret_enc else frame, thumb)
             except Exception:
                 frame_ring_buffer[frame_idx] = (frame, frame)
             if len(frame_ring_buffer) > 90:
@@ -556,9 +617,14 @@ def run_job_streaming(job_id: int, loop: asyncio.AbstractEventLoop):
                         cand_tuples = []
                         for f_i in [b_idx, p_idx, a_idx]:
                             if f_i in frame_ring_buffer:
-                                # ring buffer now stores (full_frame, thumb) tuples
-                                full_frame, _ = frame_ring_buffer[f_i]
-                                cand_tuples.append((f_i, full_frame.copy()))
+                                # ring buffer stores (jpeg_buffer_or_frame, thumb) tuples
+                                raw_or_buf, _ = frame_ring_buffer[f_i]
+                                if isinstance(raw_or_buf, np.ndarray) and raw_or_buf.ndim == 1:
+                                    full_frame = cv2.imdecode(raw_or_buf, cv2.IMREAD_COLOR)
+                                else:
+                                    full_frame = raw_or_buf
+                                if full_frame is not None:
+                                    cand_tuples.append((f_i, full_frame.copy()))
 
                         if cand_tuples:
                             res = accident_classifier_service.aggregate_candidate_frames(cand_tuples)
@@ -625,6 +691,9 @@ def run_job_streaming(job_id: int, loop: asyncio.AbstractEventLoop):
                     db.commit()
                 except Exception:
                     db.rollback()
+
+            # Phase 22.3: Cooperative sleep yields GIL to event loop for responsive WebSocket keepalive
+            time.sleep(0.001)
 
         # ---------------------------------------------------------------
         # FINALIZATION
@@ -914,6 +983,12 @@ def run_job_streaming(job_id: int, loop: asyncio.AbstractEventLoop):
         cleanup_stale_job_queues(ttl_sec=30.0)
         print(f"Job #{job_id} failed: {e}\n{tb}")
     finally:
+        with _JOB_LOCK:
+            _ACTIVE_JOBS.discard(job_id)
+            _CANCELLED_JOBS.discard(job_id)
+        frame_ring_buffer.clear()
+        import gc
+        gc.collect()
         db.close()
 
 
