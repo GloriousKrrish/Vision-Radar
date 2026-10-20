@@ -150,10 +150,24 @@ def run_examination_job(job_id: int):
         msec = cap.get(cv2.CAP_PROP_POS_MSEC)
         timestamp_s = (msec / 1000.0) if msec > 0 else (frame_index / fps)
 
+        processing_mode = config.get("processing_mode", "balanced")
+        if processing_mode == "high_speed":
+            stride = 3
+        elif processing_mode == "forensic":
+            stride = 1
+        else:
+            stride = 2
+
+        is_det_frame = (frame_index % stride == 0)
         t_inf0 = time.perf_counter()
-        raw_persons, raw_objects = detector.detect(frame)
-        active_persons = tracker.update(raw_persons, frame_index)
-        tracked_objects = object_tracker.update(raw_objects, frame_index)
+        if is_det_frame:
+            raw_persons, raw_objects = detector.detect(frame)
+            active_persons = tracker.update(raw_persons, frame_index)
+            tracked_objects = object_tracker.update(raw_objects, frame_index)
+        else:
+            active_persons = tracker.predict_step(frame_index)
+            tracked_objects = object_tracker.predict_step(frame_index)
+
         associate_persons_and_objects(active_persons, tracked_objects, object_tracker.tracks)
         t_inf = time.perf_counter() - t_inf0
         inference_durations.append(t_inf)
@@ -180,6 +194,11 @@ def run_examination_job(job_id: int):
             zones=seating_manager.get_zones()
         )
 
+        # Calculate live throughput FPS
+        processed_count += 1
+        elapsed_now = max(0.001, time.perf_counter() - t_start)
+        live_fps = round(processed_count / elapsed_now, 1)
+
         # Emit Common Envelope to real-time WebSocket queue
         envelope = CommonEnvelope(
             schema_version="2.0",
@@ -190,11 +209,14 @@ def run_examination_job(job_id: int):
             frame_index=frame_index,
             result_type="frame_observation",
             processing_status="RUNNING",
-            payload=frame_result.to_dict()
+            payload={
+                **frame_result.to_dict(),
+                "throughput_fps": live_fps,
+                "processing_mode": processing_mode
+            }
         )
         _emit(job_id, envelope.to_dict())
 
-        processed_count += 1
         frame_index += 1
 
         # Periodic progress update to DB

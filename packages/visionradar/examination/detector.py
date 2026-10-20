@@ -84,13 +84,16 @@ class ExaminationDetector:
         if _ORT_AVAILABLE:
             try:
                 opts = ort.SessionOptions()
-                opts.intra_op_num_threads = 2
+                cpu_threads = min(4, os.cpu_count() or 4)
+                opts.intra_op_num_threads = cpu_threads
                 opts.inter_op_num_threads = 1
                 opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+                available = ort.get_available_providers()
+                providers = ["OpenVINOExecutionProvider", "CPUExecutionProvider"] if "OpenVINOExecutionProvider" in available else ["CPUExecutionProvider"]
                 self.ort_session = ort.InferenceSession(
                     self.model_path,
                     sess_options=opts,
-                    providers=["CPUExecutionProvider"]
+                    providers=providers
                 )
                 self.ort_input_name = self.ort_session.get_inputs()[0].name
             except Exception as e:

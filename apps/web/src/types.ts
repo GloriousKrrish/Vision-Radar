@@ -32,6 +32,7 @@ export interface CandidateViolation {
   evidenceAvailable?: boolean;
   evidenceReason?: string;
   jobId?: number;
+  violationType?: string;
 }
 
 export interface CalibrationData {
@@ -82,7 +83,31 @@ export type ExaminationEventType =
   | 'LEAVING_SEATING_ZONE'
   | 'POSSIBLE_OBJECT_TRANSFER'
   | 'REPEATED_ORIENTATION_PATTERN'
+  | 'GAZE_DEVIATION'
+  | 'PEER_PROXIMITY'
   | 'OTHER_OBSERVABLE_INTERACTION';
+
+export type ProcessingMode = 'balanced' | 'high_speed' | 'forensic';
+
+export interface ForensicAuditReport {
+  report_version: string;
+  report_id: string;
+  generated_at: string;
+  job_id: number;
+  cryptographic_seal: string;
+  video_metadata: {
+    filename: string;
+    duration_sec: number;
+    fps: number;
+    sha256_hash: string;
+  };
+  summary_metrics: {
+    total_person_tracks: number;
+    total_candidate_events: number;
+    priority_breakdown: Record<string, number>;
+  };
+  events_timeline: ExaminationEvent[];
+}
 
 export interface ExaminationEvent {
   id?: number;

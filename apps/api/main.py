@@ -1723,6 +1723,52 @@ def get_examination_proctor_report(job_id: int, db: Session = Depends(get_db)):
     }
 
 
+@app.get("/api/v1/jobs/{job_id}/examination/audit-report")
+def get_forensic_audit_report(job_id: int, db: Session = Depends(get_db)):
+    """Generates a verifiable, cryptographically sealed Examination Forensic Audit Report."""
+    from visionradar.examination.audit_exporter import ForensicAuditExporter
+    try:
+        report = ForensicAuditExporter.generate_audit_report(job_id, db)
+        return report
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to generate audit report: {str(e)}")
+
+
+@app.get("/api/v1/jobs/{job_id}/examination/audit-report/download")
+def download_forensic_audit_report(job_id: int, db: Session = Depends(get_db)):
+    """Serves the cryptographic JSON audit report file for downloading and archival."""
+    from visionradar.examination.audit_exporter import ForensicAuditExporter
+    try:
+        report = ForensicAuditExporter.generate_audit_report(job_id, db)
+        content = json.dumps(report, indent=2)
+        filename = f"visionradar_exam_audit_job_{job_id}.json"
+        return Response(
+            content=content,
+            media_type="application/json",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to export audit report: {str(e)}")
+
+
+@app.get("/api/v1/jobs/{job_id}/examination/audit-report/html")
+def view_forensic_audit_html(job_id: int, db: Session = Depends(get_db)):
+    """Serves the self-contained, printable HTML forensic audit dossier for browser printing/PDF saving."""
+    from visionradar.examination.audit_exporter import ForensicAuditExporter
+    try:
+        report = ForensicAuditExporter.generate_audit_report(job_id, db)
+        html_content = ForensicAuditExporter.generate_audit_html(report)
+        return Response(content=html_content, media_type="text/html")
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to render audit html: {str(e)}")
+
+
 @app.get("/api/v1/jobs/{job_id}/examination/events")
 def list_examination_events(job_id: int, db: Session = Depends(get_db)):
     """List all candidate events for an examination job."""

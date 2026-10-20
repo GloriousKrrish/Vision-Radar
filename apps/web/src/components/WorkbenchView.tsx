@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { apiUrl, getWsUrl } from '../config/api';
-import { AnalysisModule, SceneClassificationResult, ExaminationEvent, ExaminationPersonTrack, ExaminationZone, GeminiStatus, GeminiExamAnalysis } from '../types';
+import { AnalysisModule, SceneClassificationResult, ExaminationEvent, ExaminationPersonTrack, ExaminationZone, GeminiStatus, GeminiExamAnalysis, ProcessingMode } from '../types';
 import {
   SceneRecommendationBanner,
   PrimaryFindingPanel,
@@ -143,6 +143,7 @@ export const WorkbenchView: React.FC = () => {
   const [geminiExamAnalysis, setGeminiExamAnalysis] = useState<GeminiExamAnalysis | null>(null);
   const [isAnalyzingGemini, setIsAnalyzingGemini] = useState<boolean>(false);
   const [geminiError, setGeminiError] = useState<string | null>(null);
+  const [processingMode, setProcessingMode] = useState<ProcessingMode>('balanced');
 
   // --- crowded-scene intelligent visualization state ---
   const [vizMode, setVizMode] = useState<'MINIMAL' | 'STANDARD' | 'INTELLIGENCE'>('STANDARD');
@@ -737,6 +738,9 @@ export const WorkbenchView: React.FC = () => {
           if (frameIdx >= 0 && frameIdx <= lastRenderedFrameIdRef.current) return;
           if (frameIdx >= 0) lastRenderedFrameIdRef.current = frameIdx;
           setLatestInferenceFrame(frameIdx);
+          if (payload?.throughput_fps !== undefined) {
+            setProcessingFps(payload.throughput_fps);
+          }
 
           const persons = payload?.persons || [];
           const objects = payload?.objects || [];
@@ -812,6 +816,10 @@ export const WorkbenchView: React.FC = () => {
           setServerPipelineLatencyMs(latencyMs);
         } else if (payload.server_pipeline_latency_ms !== undefined) {
           setServerPipelineLatencyMs(Math.round(payload.server_pipeline_latency_ms));
+        }
+
+        if (payload?.throughput_fps !== undefined) {
+          setProcessingFps(payload.throughput_fps);
         }
 
         const tracks: any[] = payload.tracks || [];
@@ -1739,7 +1747,7 @@ export const WorkbenchView: React.FC = () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           calibration_id: assignedCalib ? assignedCalib.id : null,
-          config_json: { module: chosenModule }
+          config_json: { module: chosenModule, processing_mode: processingMode }
         })
       });
       if (!jobRes.ok) throw new Error(`Job creation failed: ${jobRes.status}`);
@@ -2941,6 +2949,27 @@ export const WorkbenchView: React.FC = () => {
                 🎓 Examination Intelligence Active · Observable Events Proctorship
               </span>
             )}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <span style={{ fontSize: '11px', color: '#64748B', fontWeight: 700 }}>Profile:</span>
+              <select
+                value={processingMode}
+                onChange={e => setProcessingMode(e.target.value as ProcessingMode)}
+                style={{
+                  padding: '3px 8px',
+                  fontSize: '11px',
+                  borderRadius: '4px',
+                  border: '1px solid #CBD5E1',
+                  background: processingMode === 'high_speed' ? '#EEF2FF' : '#F8FAFC',
+                  color: processingMode === 'high_speed' ? '#4F46E5' : '#334155',
+                  fontWeight: 600
+                }}
+                title="Select inference speed profile (Optimized for Intel i5 CPU)"
+              >
+                <option value="high_speed">⚡ High Speed (20+ FPS, Stride 3)</option>
+                <option value="balanced">⚖️ Balanced (~15 FPS, Stride 2)</option>
+                <option value="forensic">🔬 Deep Forensic (Dense 1:1)</option>
+              </select>
+            </div>
             <button
               className="b g"
               onClick={handleSaveWorkbenchCalibration}
@@ -2964,7 +2993,9 @@ export const WorkbenchView: React.FC = () => {
           <div style={{ display: 'flex', gap: '16px', fontSize: '11px', color: '#64748B', marginTop: '8px', paddingTop: '6px', borderTop: '1px solid #E2E8F0', flexWrap: 'wrap' }}>
             <span>Detector: <b style={{ color: '#4F46E5' }}>{activeModule === 'traffic' ? (telemetry?.detector_actual || 'YOLOX-Nano-ONNX') : 'YOLOX-COCO (Person/Objects)'}</b></span>
             <span>Tracker: <b style={{ color: '#10B981' }}>{activeModule === 'traffic' ? 'ByteTrack' : 'PersonTracker (Spatial IoU)'}</b></span>
+            <span>Profile: <b style={{ color: '#0EA5E9' }}>{processingMode.toUpperCase()}</b></span>
             <span>Status: <b style={{ color: wsConnected ? '#10B981' : '#64748B' }}>{wsConnected ? '● STREAMING' : pipelineStage === 'COMPLETED' ? 'COMPLETED' : 'OFFLINE'}</b></span>
+            <span>Throughput: <b style={{ color: '#0EA5E9' }}>{processingFps ? `${processingFps.toFixed(1)} FPS` : 'N/A'}</b></span>
             <span>Inference: <b style={{ color: '#10B981' }}>{telemetry?.inference_time_ms ? `${telemetry.inference_time_ms} ms/frame` : processingFps ? `${(1000 / processingFps).toFixed(0)} ms/frame` : 'N/A'}</b></span>
             <span>Model Hash: <b style={{ fontFamily: 'monospace', color: '#64748B' }}>c789161e...</b></span>
           </div>

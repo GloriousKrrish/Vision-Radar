@@ -394,21 +394,44 @@ def run_job_streaming(job_id: int, loop: asyncio.AbstractEventLoop):
                 oldest_idx = min(frame_ring_buffer.keys())
                 del frame_ring_buffer[oldest_idx]
 
-            # YOLOX detection
-            t0_det = time.monotonic()
-            dets = detector.detect(frame)
-            det_ms = (time.monotonic() - t0_det) * 1000.0
-            perf["total_detector_ms"] += det_ms
-            last_successful_stage = "DETECTOR"
-            last_stage_ts = time.time()
+            # Determine processing stride from job_cfg:
+            # "high_speed" -> stride 3, "balanced" (default) -> stride 2, "forensic" -> stride 1
+            processing_mode = job_cfg.get("processing_mode", "balanced")
+            if processing_mode == "high_speed":
+                traffic_stride = 3
+            elif processing_mode == "forensic":
+                traffic_stride = 1
+            else:
+                traffic_stride = 2
 
-            # ByteTrack update (single persistent instance — never reset per frame)
-            t0_trk = time.monotonic()
-            tracks = tracker.update(dets, frame_idx, timestamp)
-            trk_ms = (time.monotonic() - t0_trk) * 1000.0
-            perf["total_tracker_ms"] += trk_ms
-            last_successful_stage = "TRACKER"
-            last_stage_ts = time.time()
+            is_traffic_det_frame = (frame_idx % traffic_stride == 0)
+
+            if is_traffic_det_frame:
+                # YOLOX detection
+                t0_det = time.monotonic()
+                dets = detector.detect(frame)
+                det_ms = (time.monotonic() - t0_det) * 1000.0
+                perf["total_detector_ms"] += det_ms
+                last_successful_stage = "DETECTOR"
+                last_stage_ts = time.time()
+
+                # ByteTrack update (single persistent instance — never reset per frame)
+                t0_trk = time.monotonic()
+                tracks = tracker.update(dets, frame_idx, timestamp)
+                trk_ms = (time.monotonic() - t0_trk) * 1000.0
+                perf["total_tracker_ms"] += trk_ms
+                last_successful_stage = "TRACKER"
+                last_stage_ts = time.time()
+            else:
+                dets = []
+                det_ms = 0.0
+                t0_trk = time.monotonic()
+                tracks = tracker.predict_step(frame_idx, timestamp)
+                trk_ms = (time.monotonic() - t0_trk) * 1000.0
+                perf["total_tracker_ms"] += trk_ms
+                last_successful_stage = "TRACKER"
+                last_stage_ts = time.time()
+
             if frame_idx == 0 or frame_idx % 30 == 0:
                 log_lifecycle(job_id, "FRAME_PROCESSED", frame_index=frame_idx)
 
@@ -601,6 +624,51 @@ def run_job_streaming(job_id: int, loop: asyncio.AbstractEventLoop):
                             db.add(db_ev)
                         except Exception:
                             pass
+                elif trk.track_id not in recorded_violation_tracks:
+                    wrong_way = rule_engine.evaluate_wrong_way(
+                        track_id=trk.track_id,
+                        vehicle_class=trk.vehicle_class,
+                        frame_index=frame_idx,
+                        timestamp=timestamp,
+                        trajectory=trk.trajectory,
+                        expected_direction="SOUTHWARD",
+                        location_label=trk.lane if trk.lane != "UNKNOWN" else "Lane 1",
+                        job_id=job.id
+                    )
+                    if wrong_way:
+                        recorded_violation_tracks.add(trk.track_id)
+                        try:
+                            ev_res = evidence_writer.write_evidence_package(
+                                violation_id=wrong_way.violation_id,
+                                frame_img=frame,
+                                bbox=trk.bbox,
+                                metadata=wrong_way.to_dict()
+                            )
+                            db_viol = Violation(
+                                job_id=job.id,
+                                track_id=trk.track_id,
+                                vehicle_class=trk.vehicle_class,
+                                frame_index=frame_idx,
+                                timestamp=timestamp,
+                                estimated_speed_kmh=0.0,
+                                speed_limit_kmh=rule_engine.speed_limit_kmh,
+                                uncertainty_kmh=0.0,
+                                location_label=wrong_way.location_label,
+                                review_status="PENDING",
+                                reviewer_notes=wrong_way.reviewer_notes
+                            )
+                            db.add(db_viol)
+                            db.flush()
+                            if ev_res:
+                                db_ev = Evidence(
+                                    violation_id=db_viol.id,
+                                    full_frame_path=ev_res["full_frame"],
+                                    crop_frame_path=ev_res["crop_frame"],
+                                    metadata_json=wrong_way.to_dict()
+                                )
+                                db.add(db_ev)
+                        except Exception:
+                            pass
 
                 # Intelligence engines
                 try:
@@ -662,6 +730,9 @@ def run_job_streaming(job_id: int, loop: asyncio.AbstractEventLoop):
             except Exception as _e_intel:
                 pass
 
+            elapsed_job = max(0.001, time.monotonic() - t_job_start)
+            live_job_fps = round(perf["frames_processed"] / elapsed_job, 1)
+
             _emit(job_id, {
                 "type": "frame_result",
                 "job_id": job_id,
@@ -672,6 +743,8 @@ def run_job_streaming(job_id: int, loop: asyncio.AbstractEventLoop):
                 "tracks": frame_tracks_payload,
                 "detector_ms": round(det_ms, 1),
                 "tracker_ms": round(trk_ms, 1),
+                "throughput_fps": live_job_fps,
+                "processing_mode": processing_mode,
                 "last_successful_stage": last_successful_stage,
                 "last_frame_index": frame_idx,
                 "last_stage_timestamp": last_stage_ts

@@ -44,6 +44,8 @@ class ExaminationEventEngine:
 
         # Orientation shift tracking: track_id -> list of (frame, orientation)
         self._orientation_history: Dict[int, List[Tuple[int, str]]] = {}
+        self._gaze_deviation_streaks: Dict[int, int] = {}
+        self._peer_proximity_streaks: Dict[Tuple[int, int], int] = {}
 
         # Active & completed candidate events
         self._active_events: Dict[str, ExaminationEvent] = {}
@@ -319,6 +321,116 @@ class ExaminationEventEngine:
                         )
                         self._active_events[event_key] = evt
                         emitted_this_frame.append(evt)
+
+        # --------------------------------------------------------------------
+        # 5. Event: GAZE_DEVIATION
+        # Sustained lateral head turn / body orientation toward peer or lap
+        # --------------------------------------------------------------------
+        for p in persons:
+            p_id = p.track_id
+            orientation = p.posture_orientation or "forward"
+            w = max(1.0, p.bbox[2] - p.bbox[0])
+            h = max(1.0, p.bbox[3] - p.bbox[1])
+            aspect_ratio = w / h
+            is_deviated = orientation in ("lateral_left", "lateral_right", "looking_down") or (aspect_ratio > 0.85)
+
+            event_key = f"gaze:{p_id}"
+            if is_deviated:
+                streak = self._gaze_deviation_streaks.get(p_id, 0) + 1
+                self._gaze_deviation_streaks[p_id] = streak
+                if streak >= 18 and event_key not in self._active_events:
+                    direction_label = "lateral / neighbor direction" if orientation != "looking_down" else "lap / concealed area"
+                    evt = ExaminationEvent(
+                        event_id=f"evt_gaze_{uuid.uuid4().hex[:8]}",
+                        job_id=self.job_id,
+                        video_id=self.video_id,
+                        event_type=ExaminationEventType.GAZE_DEVIATION,
+                        start_frame=max(0, frame_index - streak),
+                        end_frame=frame_index,
+                        start_time=max(0.0, round(timestamp_s - (streak / self.fps), 2)),
+                        end_time=round(timestamp_s, 2),
+                        person_track_id=p_id,
+                        supporting_objects=[],
+                        supporting_frames=[frame_index],
+                        confidence=0.76,
+                        uncertainty=0.18,
+                        priority="AMBER",
+                        evidence_strength="MEDIUM",
+                        detection_confidence=0.80,
+                        association_confidence=0.75,
+                        event_confidence=0.76,
+                        supporting_observations=f"Track #{p_id} exhibited sustained gaze deviation toward {direction_label} for {streak / self.fps:.1f}s",
+                        description=f"Candidate gaze deviation / sustained head turn toward {direction_label} by Track #{p_id} ({streak / self.fps:.1f}s)",
+                        review_status="PENDING"
+                    )
+                    self._active_events[event_key] = evt
+                    emitted_this_frame.append(evt)
+                elif streak >= 18 and event_key in self._active_events:
+                    evt = self._active_events[event_key]
+                    evt.end_frame = frame_index
+                    evt.end_time = round(timestamp_s, 2)
+                    if frame_index not in evt.supporting_frames:
+                        evt.supporting_frames.append(frame_index)
+            else:
+                self._gaze_deviation_streaks[p_id] = 0
+                if event_key in self._active_events:
+                    self._completed_events.append(self._active_events.pop(event_key))
+
+        # --------------------------------------------------------------------
+        # 6. Event: PEER_PROXIMITY
+        # Sustained physical convergence or closeness between two seated candidates
+        # --------------------------------------------------------------------
+        if len(persons) >= 2:
+            for i in range(len(persons)):
+                for j in range(i + 1, len(persons)):
+                    p1, p2 = persons[i], persons[j]
+                    dist = bbox_distance(p1.bbox, p2.bbox)
+                    p1_w = p1.bbox[2] - p1.bbox[0]
+                    p2_w = p2.bbox[2] - p2.bbox[0]
+                    threshold_dist = max(110.0, (p1_w + p2_w) * 0.75)
+
+                    pair_key = (min(p1.track_id, p2.track_id), max(p1.track_id, p2.track_id))
+                    event_key = f"proximity:{pair_key[0]}:{pair_key[1]}"
+                    if dist <= threshold_dist:
+                        streak = self._peer_proximity_streaks.get(pair_key, 0) + 1
+                        self._peer_proximity_streaks[pair_key] = streak
+
+                        if streak >= 15 and event_key not in self._active_events:
+                            evt = ExaminationEvent(
+                                event_id=f"evt_prox_{uuid.uuid4().hex[:8]}",
+                                job_id=self.job_id,
+                                video_id=self.video_id,
+                                event_type=ExaminationEventType.PEER_PROXIMITY,
+                                start_frame=max(0, frame_index - streak),
+                                end_frame=frame_index,
+                                start_time=max(0.0, round(timestamp_s - (streak / self.fps), 2)),
+                                end_time=round(timestamp_s, 2),
+                                person_track_id=pair_key[0],
+                                supporting_objects=[],
+                                supporting_frames=[frame_index],
+                                confidence=0.78,
+                                uncertainty=0.15,
+                                priority="AMBER",
+                                evidence_strength="MEDIUM",
+                                detection_confidence=0.82,
+                                association_confidence=0.78,
+                                event_confidence=0.78,
+                                supporting_observations=f"Proximity convergence between Track #{pair_key[0]} and Track #{pair_key[1]} ({dist:.1f}px distance, {streak / self.fps:.1f}s)",
+                                description=f"Candidate peer proximity / desk convergence between Track #{pair_key[0]} and Track #{pair_key[1]} ({streak / self.fps:.1f}s)",
+                                review_status="PENDING"
+                            )
+                            self._active_events[event_key] = evt
+                            emitted_this_frame.append(evt)
+                        elif streak >= 15 and event_key in self._active_events:
+                            evt = self._active_events[event_key]
+                            evt.end_frame = frame_index
+                            evt.end_time = round(timestamp_s, 2)
+                            if frame_index not in evt.supporting_frames:
+                                evt.supporting_frames.append(frame_index)
+                    else:
+                        self._peer_proximity_streaks[pair_key] = 0
+                        if event_key in self._active_events:
+                            self._completed_events.append(self._active_events.pop(event_key))
 
         return list(self._active_events.values())
 

@@ -446,6 +446,31 @@ class ByteTrackTracker(BaseTracker):
 
         return list(self.active_tracks.values())
 
+    def predict_step(self, frame_index: int, timestamp: float) -> List[TrackedVehicle]:
+        """
+        Advances Kalman Filter prediction for all active tracks on frames where detector inference
+        is skipped (e.g. adaptive stride processing for high-speed CPU execution).
+        Ensures continuous trajectory and speed estimation without running the full detector.
+        """
+        active_tids = list(self.active_tracks.keys())
+        for tid in active_tids:
+            trk = self.active_tracks[tid]
+            predicted_bbox = trk.predict()
+            trk.last_frame = frame_index
+            trk.last_timestamp = timestamp
+            trk.trajectory.add_point(
+                TrajectoryPoint(frame_index, timestamp, predicted_bbox, confidence=trk.confidence)
+            )
+            if trk.time_since_update > self.max_age:
+                self.recently_lost_tracks[tid] = {
+                    "last_bbox": trk.bbox,
+                    "last_frame": trk.last_frame,
+                    "lost_at_frame": frame_index,
+                    "vehicle_class": trk.vehicle_class
+                }
+                del self.active_tracks[tid]
+        return list(self.active_tracks.values())
+
     def get_tracking_metrics(self) -> Dict[str, Any]:
         total_tracks = self.next_id - 1
         active_count = len(self.active_tracks)

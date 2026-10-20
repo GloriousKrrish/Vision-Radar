@@ -129,6 +129,26 @@ class PersonTracker:
 
         return active_persons
 
+    def predict_step(self, frame_index: int) -> List[PersonDetection]:
+        """
+        Propagates active person tracks during skipped frames for speed optimization.
+        Keeps visual boxes active without running expensive neural network inference.
+        """
+        active_persons = []
+        for t in self.tracks:
+            if t.time_since_update <= 3:
+                active_persons.append(
+                    PersonDetection(
+                        track_id=t.track_id,
+                        bbox=t.bbox,
+                        confidence=round(t.confidence * 0.99, 4),
+                        assigned_zone=t.assigned_zone,
+                        zone_confidence=t.zone_confidence,
+                        posture_orientation=t.orientation
+                    )
+                )
+        return active_persons
+
 
 class ExaminationObjectTrack:
     """Represents a continuous track of an examination object (e.g. cell phone, paper, laptop)."""
@@ -225,6 +245,28 @@ class ExaminationObjectTracker:
 
         self.tracks = [t for t in self.tracks if t.time_since_update <= self.max_lost_frames]
         return raw_objects
+
+    def predict_step(self, frame_index: int) -> List[ExaminationObjectDetection]:
+        """
+        Propagates active object tracks during skipped frames for speed optimization.
+        """
+        active_objects = []
+        for t in self.tracks:
+            if t.time_since_update <= 3:
+                active_objects.append(
+                    ExaminationObjectDetection(
+                        object_id=t.object_track_id,
+                        object_track_id=t.object_track_id,
+                        object_class=t.object_class,
+                        bbox=t.bbox,
+                        confidence=round(t.confidence * 0.99, 4),
+                        near_person_track_id=t.associated_person_track_id,
+                        association_status=t.association_status,
+                        association_confidence=t.association_confidence,
+                        distance_to_person_px=None
+                    )
+                )
+        return active_objects
 
 
 def associate_persons_and_objects(

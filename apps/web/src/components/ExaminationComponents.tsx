@@ -165,6 +165,16 @@ export const PrimaryFindingPanel: React.FC<PrimaryFindingProps> = ({
     }
   };
 
+  const handleOpenPrintableDossier = () => {
+    if (!jobId) return;
+    window.open(`/api/v1/jobs/${jobId}/examination/audit-report/html`, '_blank');
+  };
+
+  const handleDownloadSignedJson = () => {
+    if (!jobId) return;
+    window.open(`/api/v1/jobs/${jobId}/examination/audit-report/download`, '_blank');
+  };
+
   if (!primaryFinding) {
     return (
       <div className="card" style={{
@@ -175,7 +185,7 @@ export const PrimaryFindingPanel: React.FC<PrimaryFindingProps> = ({
         borderRadius: '8px',
         color: '#F8FAFC'
       }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
             <span style={{ color: '#10B981', fontSize: '18px' }}>✓</span>
             <div>
@@ -186,22 +196,40 @@ export const PrimaryFindingPanel: React.FC<PrimaryFindingProps> = ({
             </div>
           </div>
           {jobId && (
-            <button
-              onClick={handleDownloadReport}
-              disabled={downloading}
-              style={{
-                background: '#1E293B',
-                color: '#CBD5E1',
-                border: '1px solid #334155',
-                padding: '6px 12px',
-                borderRadius: '6px',
-                fontSize: '11px',
-                fontWeight: 600,
-                cursor: 'pointer'
-              }}
-            >
-              {downloading ? '⏳ Generating...' : '📄 Download Forensic Report'}
-            </button>
+            <div style={{ display: 'flex', gap: '6px' }}>
+              <button
+                onClick={handleOpenPrintableDossier}
+                style={{
+                  background: '#2563EB',
+                  color: '#FFFFFF',
+                  border: 'none',
+                  padding: '6px 12px',
+                  borderRadius: '5px',
+                  fontSize: '11px',
+                  fontWeight: 700,
+                  cursor: 'pointer'
+                }}
+                title="Open official printable audit report with digital seal"
+              >
+                🖨️ Printable Audit Dossier
+              </button>
+              <button
+                onClick={handleDownloadSignedJson}
+                style={{
+                  background: '#1E293B',
+                  color: '#CBD5E1',
+                  border: '1px solid #334155',
+                  padding: '6px 12px',
+                  borderRadius: '5px',
+                  fontSize: '11px',
+                  fontWeight: 600,
+                  cursor: 'pointer'
+                }}
+                title="Download signed JSON audit evidence package"
+              >
+                📥 Export JSON
+              </button>
+            </div>
           )}
         </div>
       </div>
@@ -267,22 +295,40 @@ export const PrimaryFindingPanel: React.FC<PrimaryFindingProps> = ({
             STATUS: {primaryFinding.review_status}
           </span>
           {jobId && (
-            <button
-              onClick={handleDownloadReport}
-              disabled={downloading}
-              style={{
-                background: '#4F46E5',
-                color: '#FFFFFF',
-                border: 'none',
-                padding: '5px 12px',
-                borderRadius: '5px',
-                fontSize: '11px',
-                fontWeight: 700,
-                cursor: 'pointer'
-              }}
-            >
-              {downloading ? '⏳ Exporting...' : '📄 Download Forensic Report'}
-            </button>
+            <div style={{ display: 'flex', gap: '6px' }}>
+              <button
+                onClick={handleOpenPrintableDossier}
+                style={{
+                  background: '#2563EB',
+                  color: '#FFFFFF',
+                  border: 'none',
+                  padding: '5px 12px',
+                  borderRadius: '5px',
+                  fontSize: '11px',
+                  fontWeight: 700,
+                  cursor: 'pointer'
+                }}
+                title="Open official printable audit report with digital seal"
+              >
+                🖨️ Printable Audit Dossier
+              </button>
+              <button
+                onClick={handleDownloadSignedJson}
+                style={{
+                  background: '#1E293B',
+                  color: '#CBD5E1',
+                  border: '1px solid #334155',
+                  padding: '5px 12px',
+                  borderRadius: '5px',
+                  fontSize: '11px',
+                  fontWeight: 600,
+                  cursor: 'pointer'
+                }}
+                title="Download signed JSON audit evidence package"
+              >
+                📥 Export JSON
+              </button>
+            </div>
           )}
         </div>
       </div>
@@ -757,6 +803,8 @@ export const ExaminationEventsTable: React.FC<ExamTableProps> = ({
       case 'LEAVING_SEATING_ZONE': return '🚶 Leaving Seating Zone';
       case 'POSSIBLE_OBJECT_TRANSFER': return '🤝 Possible Object Transfer';
       case 'REPEATED_ORIENTATION_PATTERN': return '🔄 Repeated Orientation Pattern';
+      case 'GAZE_DEVIATION': return '👀 Gaze / Head Deviation';
+      case 'PEER_PROXIMITY': return '👥 Peer Proximity';
       case 'OTHER_OBSERVABLE_INTERACTION': return '📋 Other Observable Interaction';
       default: return t;
     }
@@ -787,6 +835,8 @@ export const ExaminationEventsTable: React.FC<ExamTableProps> = ({
           >
             <option value="ALL">All Event Types</option>
             <option value="POSSIBLE_PHONE_INTERACTION">📱 Phone Interaction</option>
+            <option value="GAZE_DEVIATION">👀 Gaze / Head Deviation</option>
+            <option value="PEER_PROXIMITY">👥 Peer Proximity</option>
             <option value="RESTRICTED_ZONE_ENTRY">⛔ Restricted Zone</option>
             <option value="LEAVING_SEATING_ZONE">🚶 Leaving Seat</option>
             <option value="POSSIBLE_OBJECT_TRANSFER">🤝 Object Transfer</option>

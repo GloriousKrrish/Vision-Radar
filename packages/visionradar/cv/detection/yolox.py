@@ -87,8 +87,10 @@ class YOLOXDetector(BaseDetector):
                         sess_opts.intra_op_num_threads = min(4, os.cpu_count() or 4)
                         sess_opts.log_severity_level = 3  # suppress harmless shape warnings
                         sess_opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+                        available_p = ort.get_available_providers()
+                        active_providers = ['OpenVINOExecutionProvider', 'CPUExecutionProvider'] if 'OpenVINOExecutionProvider' in available_p else ['CPUExecutionProvider']
                         self.ort_session = ort.InferenceSession(
-                            model_proto.SerializeToString(), sess_opts, providers=['CPUExecutionProvider']
+                            model_proto.SerializeToString(), sess_opts, providers=active_providers
                         )
                         self.ort_input_name = self.ort_session.get_inputs()[0].name
                         self.valid_onnx_detector = True
