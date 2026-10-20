@@ -58,34 +58,34 @@ class SpeedEstimate:
     """
     def __init__(
         self,
-        speed_method: str,
-        distance_m: float,
-        elapsed_time_s: float,
-        speed_mps: float,
-        speed_kmh: float,
-        uncertainty_kmh: float,
-        validity: str,
-        sample_count: int,
-        instantaneous_kmh: float,
-        smoothed_kmh: float,
-        confidence_low_kmh: float,
-        confidence_high_kmh: float,
-        error_components: Dict[str, float],
+        speed_method: str = "KALMAN_SMOOTHED",
+        distance_m: float = 0.0,
+        elapsed_time_s: float = 0.0,
+        speed_mps: float = 0.0,
+        speed_kmh: float = 0.0,
+        uncertainty_kmh: float = 0.0,
+        validity: str = "VALID",
+        sample_count: int = 1,
+        instantaneous_kmh: Optional[float] = None,
+        smoothed_kmh: Optional[float] = None,
+        confidence_low_kmh: Optional[float] = None,
+        confidence_high_kmh: Optional[float] = None,
+        error_components: Optional[Dict[str, float]] = None,
         provenance: Optional[SpeedProvenance] = None
     ):
         self.speed_method = speed_method
         self.distance_m = distance_m
         self.elapsed_time_s = elapsed_time_s
         self.speed_mps = speed_mps
-        self.speed_kmh = speed_kmh
+        self.speed_kmh = speed_kmh if speed_kmh > 0 else (smoothed_kmh or 0.0)
         self.uncertainty_kmh = uncertainty_kmh
         self.validity = validity
         self.sample_count = sample_count
-        self.instantaneous_kmh = instantaneous_kmh
-        self.smoothed_kmh = smoothed_kmh
+        self.instantaneous_kmh = instantaneous_kmh if instantaneous_kmh is not None else speed_kmh
+        self.smoothed_kmh = smoothed_kmh if smoothed_kmh is not None else speed_kmh
         self.confidence_low_kmh = confidence_low_kmh
         self.confidence_high_kmh = confidence_high_kmh
-        self.error_components = error_components
+        self.error_components = error_components or {}
         self.provenance = provenance
 
     def to_dict(self) -> Dict[str, Any]:
@@ -174,6 +174,20 @@ class MonocularSpeedEstimator:
         self.job_id = job_id
         self.video_id = video_id
         self.calibration_id = calibration_id
+
+    def is_calibrated(self) -> bool:
+        """Returns True if a valid road calibration matrix is configured."""
+        return self.calibrator is not None and getattr(self.calibrator, "h_matrix", None) is not None
+
+    def get_diagnostics(self) -> Dict[str, Any]:
+        """Returns current calibration and estimator diagnostics."""
+        is_calib = self.is_calibrated()
+        return {
+            "calibration_status": "CALIBRATED" if is_calib else "UNCALIBRATED",
+            "is_calibrated": is_calib,
+            "fps": self.fps,
+            "window_size_frames": self.window_size_frames
+        }
 
     def extract_contiguous_valid_segments(self, trajectory: VehicleTrajectory) -> List[List[TrajectoryPoint]]:
         """

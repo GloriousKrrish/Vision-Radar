@@ -297,3 +297,73 @@ class ResearchFailureCaseDB(Base):
 
     experiment = relationship("ResearchExperimentDB", back_populates="failure_cases")
 
+
+# ============================================================================
+# Universal Video Intelligence: Additive Examination & Routing Models
+# ============================================================================
+
+class SceneClassificationRecord(Base):
+    __tablename__ = "scene_classifications"
+
+    id = Column(Integer, primary_key=True, index=True)
+    video_id = Column(Integer, ForeignKey("videos.id"), nullable=False, index=True)
+    sha256_hash = Column(String(64), nullable=True)
+    scene_type = Column(String(64), nullable=False)  # TRAFFIC, CLASSROOM_EXAMINATION, OTHER_UNKNOWN, AMBIGUOUS
+    confidence = Column(Float, nullable=False, default=0.0)
+    recommended_module = Column(String(64), nullable=False, default="traffic")
+    requires_user_confirmation = Column(Integer, nullable=False, default=0)
+    reason = Column(Text, nullable=False)
+    model_version = Column(String(64), nullable=False, default="scene-router-v1.0")
+    cue_scores_json = Column(JSON, nullable=True)
+    created_at = Column(DateTime, default=utcnow)
+
+
+class ExaminationTrackRecord(Base):
+    __tablename__ = "examination_tracks"
+
+    id = Column(Integer, primary_key=True, index=True)
+    job_id = Column(Integer, ForeignKey("processing_jobs.id"), nullable=False, index=True)
+    track_id = Column(Integer, nullable=False, index=True)
+    entity_type = Column(String(32), nullable=False, default="person")  # person, object
+    first_frame = Column(Integer, nullable=False)
+    last_frame = Column(Integer, nullable=False)
+    assigned_zone = Column(String(64), nullable=True)
+    trajectory_json = Column(JSON, nullable=True)
+    created_at = Column(DateTime, default=utcnow)
+
+
+class ExaminationEventRecord(Base):
+    __tablename__ = "examination_events"
+
+    id = Column(Integer, primary_key=True, index=True)
+    event_id = Column(String(64), unique=True, index=True, nullable=False)
+    job_id = Column(Integer, ForeignKey("processing_jobs.id"), nullable=False, index=True)
+    video_id = Column(Integer, ForeignKey("videos.id"), nullable=False, index=True)
+    event_type = Column(String(64), nullable=False, index=True)
+    start_frame = Column(Integer, nullable=False)
+    end_frame = Column(Integer, nullable=False)
+    start_time = Column(Float, nullable=False)
+    end_time = Column(Float, nullable=False)
+    person_track_id = Column(Integer, nullable=True)
+    supporting_objects_json = Column(JSON, nullable=True)
+    confidence = Column(Float, nullable=False, default=0.8)
+    uncertainty = Column(Float, nullable=False, default=0.1)
+    description = Column(Text, nullable=False)
+    review_status = Column(String(32), nullable=False, default="PENDING")  # PENDING, ACCEPTED, REJECTED
+    reviewer_notes = Column(Text, nullable=True)
+    evidence_crop_path = Column(String(512), nullable=True)
+    created_at = Column(DateTime, default=utcnow)
+
+
+class ExaminationZoneRecord(Base):
+    __tablename__ = "examination_zones"
+
+    id = Column(Integer, primary_key=True, index=True)
+    video_id = Column(Integer, ForeignKey("videos.id"), nullable=False, index=True)
+    zone_id = Column(String(64), nullable=False, index=True)
+    name = Column(String(128), nullable=False)
+    zone_type = Column(String(32), nullable=False, default="SEATING_ZONE")  # SEATING_ZONE, RESTRICTED_ZONE, AISLE
+    polygon_json = Column(JSON, nullable=False)
+    created_at = Column(DateTime, default=utcnow)
+
+

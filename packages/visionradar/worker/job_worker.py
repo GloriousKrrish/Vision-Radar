@@ -285,11 +285,18 @@ def run_job_streaming(job_id: int, loop: asyncio.AbstractEventLoop):
             TrafficRiskScoringEngine, AnomalyMethod
         )
 
-        detector_type = (job.config_json or {}).get("detector", "yolox")
+        job_cfg = job.config_json or {}
+        speed_limit_kmh = float(job_cfg.get("speed_limit_kmh", 80.0))
+        warning_tolerance_kmh = float(job_cfg.get("warning_tolerance_kmh", 0.0))
+        detector_type = job_cfg.get("detector", "yolox")
         detector = get_detector(detector_type, model_path="data/models/yolox_nano.onnx")
         tracker = ByteTrackTracker()
         speed_estimator = MonocularSpeedEstimator(calibrator=calibrator, fps=meta.fps)
-        rule_engine = ViolationRuleEngine(speed_limit_kmh=80.0)
+        rule_engine = ViolationRuleEngine(
+            speed_limit_kmh=speed_limit_kmh,
+            warning_tolerance_kmh=warning_tolerance_kmh,
+            cooldown_sec=2.0
+        )
         evidence_writer = EvidenceWriter(output_dir=f"data/evidence/job_{job.id}")
 
         counting_engine = VehicleCountingEngine()
@@ -558,7 +565,8 @@ def run_job_streaming(job_id: int, loop: asyncio.AbstractEventLoop):
                         vehicle_class=trk.vehicle_class,
                         frame_index=frame_idx,
                         timestamp=timestamp,
-                        estimate=est
+                        estimate=est,
+                        job_id=job.id
                     )
                     if viol:
                         recorded_violation_tracks.add(trk.track_id)
@@ -576,10 +584,11 @@ def run_job_streaming(job_id: int, loop: asyncio.AbstractEventLoop):
                                 frame_index=frame_idx,
                                 timestamp=timestamp,
                                 estimated_speed_kmh=est.smoothed_kmh,
-                                speed_limit_kmh=80.0,
+                                speed_limit_kmh=rule_engine.speed_limit_kmh,
                                 uncertainty_kmh=est.uncertainty_kmh,
                                 location_label=trk.lane if trk.lane != "UNKNOWN" else "Lane 1",
-                                review_status="PENDING"
+                                review_status="PENDING",
+                                reviewer_notes=viol.reviewer_notes
                             )
                             db.add(db_viol)
                             db.flush()

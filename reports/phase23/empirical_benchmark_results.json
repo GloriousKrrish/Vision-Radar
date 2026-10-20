@@ -1,5 +1,5 @@
 {
-  "timestamp": 1792418734.4452515,
+  "timestamp": 1792487083.057522,
   "baseline_640": {
     "precision": 0.6195,
     "recall": 0.7292,
@@ -58,9 +58,9 @@
         "gt": 94
       }
     },
-    "latency_mean_ms": 97.96,
-    "latency_p95_ms": 115.53,
-    "throughput_fps": 10.2
+    "latency_mean_ms": 136.18,
+    "latency_p95_ms": 168.56,
+    "throughput_fps": 7.3
   },
   "optimized_416": {
     "precision": 0.5695,
@@ -120,9 +120,9 @@
         "gt": 94
       }
     },
-    "latency_mean_ms": 44.2,
-    "latency_p95_ms": 54.44,
-    "throughput_fps": 22.6
+    "latency_mean_ms": 52.02,
+    "latency_p95_ms": 62.61,
+    "throughput_fps": 19.2
   },
   "highres_640": {
     "precision": 0.5612,
@@ -182,9 +182,9 @@
         "gt": 94
       }
     },
-    "latency_mean_ms": 88.94,
-    "latency_p95_ms": 100.41,
-    "throughput_fps": 11.2
+    "latency_mean_ms": 137.38,
+    "latency_p95_ms": 165.49,
+    "throughput_fps": 7.3
   },
   "confidence_sweep_416": {
     "conf_0.15": {
@@ -245,9 +245,9 @@
           "gt": 94
         }
       },
-      "latency_mean_ms": 39.63,
-      "latency_p95_ms": 46.28,
-      "throughput_fps": 25.2
+      "latency_mean_ms": 57.13,
+      "latency_p95_ms": 79.04,
+      "throughput_fps": 17.5
     },
     "conf_0.20": {
       "precision": 0.5394,
@@ -307,9 +307,9 @@
           "gt": 94
         }
       },
-      "latency_mean_ms": 40.19,
-      "latency_p95_ms": 45.48,
-      "throughput_fps": 24.9
+      "latency_mean_ms": 57.25,
+      "latency_p95_ms": 66.26,
+      "throughput_fps": 17.5
     },
     "conf_0.25": {
       "precision": 0.5695,
@@ -369,9 +369,9 @@
           "gt": 94
         }
       },
-      "latency_mean_ms": 38.03,
-      "latency_p95_ms": 41.6,
-      "throughput_fps": 26.3
+      "latency_mean_ms": 52.12,
+      "latency_p95_ms": 59.56,
+      "throughput_fps": 19.2
     },
     "conf_0.30": {
       "precision": 0.6187,
@@ -431,9 +431,9 @@
           "gt": 94
         }
       },
-      "latency_mean_ms": 40.13,
-      "latency_p95_ms": 47.54,
-      "throughput_fps": 24.9
+      "latency_mean_ms": 54.19,
+      "latency_p95_ms": 65.48,
+      "throughput_fps": 18.5
     },
     "conf_0.35": {
       "precision": 0.6538,
@@ -493,17 +493,17 @@
           "gt": 94
         }
       },
-      "latency_mean_ms": 37.61,
-      "latency_p95_ms": 39.94,
-      "throughput_fps": 26.6
+      "latency_mean_ms": 58.97,
+      "latency_p95_ms": 83.98,
+      "throughput_fps": 17.0
     }
   },
   "stage_latency_ms": {
     "decode": NaN,
-    "preprocess": 4.46,
-    "inference": 34.8,
-    "postprocess": 6.9,
-    "track": 0.65,
-    "speed": 2.79
+    "preprocess": 6.47,
+    "inference": 52.16,
+    "postprocess": 11.23,
+    "track": 0.85,
+    "speed": 2.6
   }
 }

@@ -65,6 +65,7 @@ class JobResponse(BaseModel):
     progress_pct: float
     error_message: Optional[str]
     telemetry: Optional[Dict[str, Any]] = None
+    config_json: Optional[Any] = None
     created_at: datetime.datetime
     started_at: Optional[datetime.datetime] = None
     completed_at: Optional[datetime.datetime] = None
@@ -76,6 +77,18 @@ class ViolationReviewUpdate(BaseModel):
     review_status: str  # ACCEPTED or REJECTED
     reviewer_notes: Optional[str] = None
 
+class SpeedLimitConfigPayload(BaseModel):
+    speed_limit_kmh: float
+    warning_tolerance_kmh: float = 0.0
+
+class SpeedLimitConfigResponse(BaseModel):
+    job_id: Optional[int] = None
+    video_id: Optional[int] = None
+    speed_limit_kmh: float
+    warning_tolerance_kmh: float
+    effective_threshold_kmh: float
+    status: str = "CONFIGURED"
+
 class ViolationResponse(BaseModel):
     id: int
     job_id: int
@@ -85,13 +98,32 @@ class ViolationResponse(BaseModel):
     timestamp: float
     estimated_speed_kmh: float
     speed_limit_kmh: float
+    applied_tolerance_kmh: float = 0.0
+    effective_threshold_kmh: float = 80.0
+    amount_over_threshold_kmh: float = 0.0
     uncertainty_kmh: float
     location_label: str
     review_status: str
     reviewer_notes: Optional[str]
     full_frame_url: Optional[str] = None
     crop_frame_url: Optional[str] = None
+    evidence_available: bool = True
+    evidence_reason: Optional[str] = None
     created_at: datetime.datetime
 
     class Config:
         from_attributes = True
+
+class GeminiStatusResponse(BaseModel):
+    enabled: bool
+    configured: bool
+    status: str
+    model: str
+    max_selected_frames: int
+    timeout_sec: float
+    detail: str
+
+class GeminiAnalysisRequestPayload(BaseModel):
+    model_override: Optional[str] = None
+    force_refresh: bool = False
+
