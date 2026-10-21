@@ -33,6 +33,7 @@ from visionradar.worker.job_worker import (
     cancel_job, cancel_all_active_jobs, is_job_cancelled
 )
 from visionradar.services.pdf_report import PDFReportGenerator
+from visionradar.services.excel_export import ExcelExportEngine
 from apps.api.schemas import (
     ProjectCreate, ProjectResponse,
     VideoResponse,
@@ -1339,6 +1340,103 @@ def generate_pdf_report(job_id: int, db: Session = Depends(get_db)):
         "pdf_url": f"/static/reports/{pdf_filename}",
         "filename": pdf_filename
     }
+
+
+# ============================================================================
+# Phase 5: Enterprise Excel Intelligence Export Endpoints
+# ============================================================================
+
+@app.get("/api/v1/jobs/{job_id}/export/excel")
+@app.post("/api/v1/jobs/{job_id}/export/excel")
+def export_job_excel(job_id: int, mode: str = "final", db: Session = Depends(get_db)):
+    """
+    Phase 5: Enterprise-grade multi-sheet Excel Intelligence export.
+    Supports 'final' (completed analysis) and 'snapshot' (live in-flight) modes.
+    Generates openpyxl workbook with rich formatting, auto-filters, and frozen panes.
+    Non-blocking, streaming response to avoid server memory pressure.
+    """
+    job = db.query(ProcessingJob).filter(ProcessingJob.id == job_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    mode_lower = mode.lower()
+    if mode_lower not in ("final", "snapshot"):
+        raise HTTPException(status_code=400, detail="Invalid mode. Must be 'final' or 'snapshot'.")
+
+    cfg = job.config_json or {}
+    domain = cfg.get("module", "traffic").lower()
+    if "exam" in domain:
+        domain = "examination"
+
+    try:
+        stream = ExcelExportEngine.generate_workbook(job_id=job.id, db=db, mode=mode_lower)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to generate Excel export: {str(e)}")
+
+    filename = f"VisionRadar_{domain.capitalize()}_Job_{job.id}_{mode_lower}.xlsx"
+    return StreamingResponse(
+        stream,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "X-VisionRadar-Job-Id": str(job.id),
+            "X-VisionRadar-Domain": domain,
+            "X-VisionRadar-Export-Mode": mode_lower,
+            "Access-Control-Expose-Headers": "Content-Disposition, X-VisionRadar-Job-Id, X-VisionRadar-Domain, X-VisionRadar-Export-Mode"
+        }
+    )
+
+@app.get("/api/v1/jobs/{job_id}/export/excel/preview")
+def get_job_excel_export_preview(job_id: int, db: Session = Depends(get_db)):
+    """
+    Phase 5: Returns pre-export metadata, domain classification, and record counts
+    so the UI can display export preview cards before initiating file generation.
+    """
+    job = db.query(ProcessingJob).filter(ProcessingJob.id == job_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    cfg = job.config_json or {}
+    domain = "examination" if "exam" in (cfg.get("module") or "").lower() else "traffic"
+    video = db.query(Video).filter(Video.id == job.video_id).first()
+
+    if domain == "traffic":
+        track_count = db.query(Track).filter(Track.job_id == job_id).count()
+        event_count = db.query(Violation).filter(Violation.job_id == job_id).count()
+        trk_ids = [t.id for t in db.query(Track.id).filter(Track.job_id == job_id).all()]
+        speed_count = db.query(SpeedMeasurement).filter(SpeedMeasurement.track_id.in_(trk_ids)).count() if trk_ids else 0
+        sheets = [
+            "Executive Summary", "Processing Metadata", "Unique Tracks",
+            "Traffic Events", "Speed Analytics", "Calibration Metadata",
+            "Detection Records", "Data Dictionary", "Export Metadata"
+        ]
+    else:
+        track_count = db.query(ExaminationTrackRecord).filter(ExaminationTrackRecord.job_id == job_id).count()
+        event_count = db.query(ExaminationEventRecord).filter(ExaminationEventRecord.job_id == job_id).count()
+        speed_count = 0
+        sheets = [
+            "Executive Summary", "Processing Metadata", "Monitored Persons & Tracks",
+            "Examination Events", "Seating Zones", "Detection Records",
+            "Data Dictionary", "Export Metadata"
+        ]
+
+    return {
+        "job_id": job.id,
+        "video_filename": video.filename if video else "N/A",
+        "domain": domain,
+        "status": job.status,
+        "progress_pct": job.progress_pct,
+        "is_complete": job.status in ("SUCCEEDED", "FAILED", "CANCELLED"),
+        "recommended_mode": "final" if job.status == "SUCCEEDED" else "snapshot",
+        "counts": {
+            "tracks": track_count,
+            "events": event_count,
+            "speed_records": speed_count
+        },
+        "planned_sheets": sheets,
+        "formats": [".xlsx (Excel OpenXML)"]
+    }
+
 
 
 # ============================================================================

@@ -1,7 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { apiUrl } from '../config/api';
+import { useSharedJob } from '../context/SharedJobContext';
 
 export const ResearchWorkbenchView: React.FC = () => {
+  const { openExportModal, activeJobId } = useSharedJob();
   const [subTab, setSubTab] = useState<'list' | 'detail' | 'compare' | 'ablations' | 'failures' | 'explain' | 'report'>('list');
   const [experiments, setExperiments] = useState<any[]>([]);
   const [selectedExpId, setSelectedExpId] = useState<string>('EXP-2026-000001');
@@ -108,6 +110,27 @@ export const ResearchWorkbenchView: React.FC = () => {
           </button>
           <button className={`g ${subTab === 'report' ? 'b' : ''}`} onClick={() => { setSubTab('report'); if (selectedExpId) fetchReport(selectedExpId); }}>
             📄 Research Report
+          </button>
+          <button
+            style={{
+              marginLeft: 'auto',
+              background: '#10B981',
+              color: '#ffffff',
+              border: 'none',
+              borderRadius: '6px',
+              padding: '6px 12px',
+              fontSize: '12px',
+              fontWeight: 700,
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px'
+            }}
+            onClick={() => openExportModal(activeJobId || undefined)}
+            title="Export Active Job to Professional Excel Workbook"
+          >
+            <span>📊</span>
+            <span>Export to Excel</span>
           </button>
         </div>
       </div>

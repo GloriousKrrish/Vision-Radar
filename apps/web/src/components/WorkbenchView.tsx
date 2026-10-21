@@ -9,6 +9,7 @@ import {
   ExaminationEventsTable,
   ExaminationSidebarInspector
 } from './ExaminationComponents';
+import { useSharedJob } from '../context/SharedJobContext';
 
 // ===========================================================================
 // Constants & Canvas Resolution
@@ -84,6 +85,8 @@ export type PipelineStage =
 // WorkbenchView Component
 // ===========================================================================
 export const WorkbenchView: React.FC = () => {
+  const { activeJobId: sharedJobId, selectJob: selectSharedJob, openExportModal } = useSharedJob();
+
   // --- playback state ---
   const [frame, setFrame] = useState(0);
   const [playing, setPlaying] = useState(true);
@@ -540,7 +543,15 @@ export const WorkbenchView: React.FC = () => {
     }
   }, []);
 
-  // REST Polling Fallback to guarantee job state synchronization if WebSocket disconnects or finishes fast
+  // Rest Polling Fallback to guarantee job state synchronization if WebSocket disconnects or finishes fast
+  useEffect(() => {
+    if (sharedJobId && sharedJobId !== activeJobId && pipelineStage !== 'LIVE_INFERENCE' && pipelineStage !== 'UPLOADING') {
+      setActiveJobId(sharedJobId);
+      activeJobIdRef.current = sharedJobId;
+      loadJobResults(sharedJobId);
+    }
+  }, [sharedJobId, activeJobId, pipelineStage, loadJobResults]);
+
   useEffect(() => {
     if (!activeJobId || pipelineStage === 'COMPLETED' || pipelineStage === 'ERROR' || pipelineStage === 'IDLE') {
       return;
@@ -2686,6 +2697,26 @@ export const WorkbenchView: React.FC = () => {
                 onClick={() => setActiveModule('examination')}
               >
                 🎓 Examination
+              </button>
+              <button
+                style={{
+                  background: '#10B981',
+                  color: '#FFFFFF',
+                  padding: '3px 10px',
+                  borderRadius: '4px',
+                  fontSize: '11px',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  border: 'none',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '4px'
+                }}
+                onClick={() => openExportModal(activeJobId || sharedJobId || undefined)}
+                title="Export this job to Excel (.xlsx)"
+              >
+                <span>📊</span>
+                <span>Export to Excel</span>
               </button>
               {/* Gemini AI Status Badge */}
               <span
