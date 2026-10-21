@@ -136,6 +136,7 @@ export interface ExaminationEvent {
   supporting_observations?: string;
   visibility_warnings?: string[];
   description: string;
+  assigned_role?: string;
   review_status: 'PENDING' | 'ACCEPTED' | 'REJECTED';
   reviewer_notes?: string;
 }
@@ -149,9 +150,12 @@ export interface ExaminationZone {
 
 export interface ExaminationPersonTrack {
   track_id: number;
+  entity_type?: string;
   first_frame: number;
   last_frame: number;
   assigned_zone?: string;
+  assigned_role?: string;
+  role_source?: string;
   trajectory?: Array<{ frame: number; frame_index?: number; bbox: number[] }>;
 }
 

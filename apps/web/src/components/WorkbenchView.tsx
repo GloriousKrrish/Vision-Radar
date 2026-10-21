@@ -501,13 +501,15 @@ export const WorkbenchView: React.FC = () => {
                 const bbox = h.bbox;
                 const det = {
                   track_id: t.track_id,
-                  entity_type: 'person',
+                  entity_type: t.entity_type || 'person',
                   rx: bbox[0],
                   ry: bbox[1],
                   rw: bbox[2] - bbox[0],
                   rh: bbox[3] - bbox[1],
-                  confidence: 0.9,
-                  assigned_zone: t.assigned_zone
+                  confidence: h.conf ?? 0.9,
+                  assigned_zone: t.assigned_zone,
+                  assigned_role: t.assigned_role,
+                  role_source: t.role_source
                 };
                 if (!fMap.has(f)) fMap.set(f, []);
                 fMap.get(f)!.push(det);
@@ -767,6 +769,8 @@ export const WorkbenchView: React.FC = () => {
               rh: p.bbox[3] - p.bbox[1],
               confidence: p.confidence,
               assigned_zone: p.assigned_zone,
+              assigned_role: p.assigned_role,
+              role_source: p.role_source,
               zone_confidence: p.zone_confidence,
               is_occluded: p.is_occluded,
               active_events: activeEvts.filter((e: any) => e.person_track_id === p.track_id)
@@ -1351,11 +1355,14 @@ export const WorkbenchView: React.FC = () => {
         if (focusSelected && selTrack !== null) {
           visibleDets = visibleDets.filter(d => d.track_id === selTrack);
         } else {
-          if (classFilter !== 'ALL') {
-            visibleDets = visibleDets.filter(d => d.track_id === selTrack || (d.vehicle_class || 'car').toUpperCase() === classFilter);
+          if (activeModule !== 'examination') {
+            if (classFilter !== 'ALL') {
+              visibleDets = visibleDets.filter(d => d.track_id === selTrack || (d.vehicle_class || 'car').toUpperCase() === classFilter);
+            }
           }
           if (minConfidence > 0) {
-            visibleDets = visibleDets.filter(d => d.track_id === selTrack || (d.confidence ?? 0.9) >= minConfidence);
+            const effectiveMinConf = activeModule === 'examination' ? Math.min(minConfidence, 0.18) : minConfidence;
+            visibleDets = visibleDets.filter(d => d.track_id === selTrack || (d.confidence ?? 0.9) >= effectiveMinConf);
           }
         }
 
@@ -1434,14 +1441,31 @@ export const WorkbenchView: React.FC = () => {
           const isSelected = selTrack === det.track_id;
           const isHovered = hoveredTrack === det.track_id;
 
-          const col = isSelected ? '#F59E0B'
-            : isHovered ? '#38BDF8'
-            : bad ? '#EF4444'
-            : isCalibratedSpeed ? '#10B981'
-            : isUncalibratedMotion ? '#0EA5E9'
-            : isCalibReq ? '#64748B'
-            : isCalculating ? '#F59E0B'
-            : '#94A3B8';
+          let col = '#94A3B8';
+          if (activeModule === 'examination') {
+            const isStaff = ['INVIGILATOR', 'EXAM_COORDINATOR', 'AUTHORIZED_STAFF'].includes(det.assigned_role || '');
+            const hasActiveRedEvent = (det.active_events && det.active_events.some((e: any) => e.priority === 'RED')) ||
+              examEvents.some(e => e.person_track_id === det.track_id && e.priority === 'RED' && e.review_status !== 'REJECTED');
+            const hasActiveAmberEvent = (det.active_events && det.active_events.some((e: any) => e.priority === 'AMBER')) ||
+              examEvents.some(e => e.person_track_id === det.track_id && e.priority === 'AMBER' && e.review_status !== 'REJECTED');
+
+            col = isSelected ? '#F59E0B'
+              : isHovered ? '#38BDF8'
+              : hasActiveRedEvent ? '#EF4444'
+              : hasActiveAmberEvent ? '#F59E0B'
+              : isStaff ? '#06B6D4'
+              : det.entity_type === 'person' ? (det.assigned_role === 'STUDENT' ? '#3B82F6' : '#94A3B8')
+              : '#A855F7';
+          } else {
+            col = isSelected ? '#F59E0B'
+              : isHovered ? '#38BDF8'
+              : bad ? '#EF4444'
+              : isCalibratedSpeed ? '#10B981'
+              : isUncalibratedMotion ? '#0EA5E9'
+              : isCalibReq ? '#64748B'
+              : isCalculating ? '#F59E0B'
+              : '#94A3B8';
+          }
 
           // Box interior
           cx.fillStyle = isSelected ? 'rgba(245, 158, 11, 0.22)' : isHovered ? 'rgba(56, 189, 248, 0.20)' : (col + '20');
@@ -1482,11 +1506,16 @@ export const WorkbenchView: React.FC = () => {
           if (activeModule === 'examination') {
             if (det.entity_type === 'person') {
               const conf = Math.round((det.confidence || 0.9) * 100);
+              const role = det.assigned_role || 'UNKNOWN';
+              const rolePrefix = (role === 'INVIGILATOR' || role === 'AUTHORIZED_STAFF' || role === 'EXAM_COORDINATOR') ? 'STAFF ' : (role === 'STUDENT' ? 'STU ' : '');
+              const hasRed = examEvents.some(e => e.person_track_id === det.track_id && e.priority === 'RED' && e.review_status !== 'REJECTED');
+              const alertPrefix = hasRed ? '🚨 ' : '';
               const zoneStr = det.assigned_zone ? ` · [${det.assigned_zone}]` : '';
-              tx = `PERSON #${det.track_id} · ${conf}%${zoneStr}`;
+              tx = `${alertPrefix}${rolePrefix}#${det.track_id} · ${conf}%${zoneStr}`;
             } else {
               const conf = Math.round((det.confidence || 0.8) * 100);
-              const icon = det.entity_type === 'cell phone' ? '📱 ' : '📖 ';
+              const isUncertain = det.entity_type === 'UNCERTAIN_ELECTRONIC_DEVICE';
+              const icon = isUncertain ? '❓📱 ' : (det.entity_type === 'cell phone' ? '📱 ' : '📖 ');
               tx = `${icon}${(det.entity_type || 'OBJECT').toUpperCase()} · ${conf}%`;
             }
           } else {
@@ -3039,6 +3068,9 @@ export const WorkbenchView: React.FC = () => {
               acceptedReviews={examEvents.filter(e => e.review_status === 'ACCEPTED').length}
               activeZones={examZones.length}
               pipelineStatus={pipelineStage === 'LIVE_INFERENCE' ? 'STREAMING INFERENCE' : pipelineStage === 'COMPLETED' ? 'ANALYSIS FINALIZED' : pipelineStage}
+              studentCount={examTracks.filter(t => t.assigned_role === 'STUDENT').length}
+              staffCount={examTracks.filter(t => ['INVIGILATOR', 'EXAM_COORDINATOR', 'AUTHORIZED_STAFF'].includes(t.assigned_role || '')).length}
+              unknownCount={examTracks.filter(t => !t.assigned_role || t.assigned_role === 'UNKNOWN').length}
             />
             <ExaminationEventsTable
               events={examEvents}

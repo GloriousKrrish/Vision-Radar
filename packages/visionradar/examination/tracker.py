@@ -33,25 +33,30 @@ def calculate_containment(inner_box: List[float], outer_box: List[float]) -> flo
 
 class ExaminationPersonTrack:
     """Represents a single continuous visual observation track of a person."""
-    def __init__(self, track_id: int, bbox: List[float], confidence: float, frame_index: int):
+    def __init__(self, track_id: int, bbox: List[float], confidence: float, frame_index: int, size_category: str = "medium"):
         self.track_id = track_id
         self.bbox = list(bbox)
         self.confidence = confidence
         self.first_frame = frame_index
         self.last_frame = frame_index
         self.time_since_update = 0
+        self.size_category = size_category
+        self.assigned_role = "UNKNOWN"
+        self.role_source = "DEFAULT"
         self.history: List[Dict[str, Any]] = [{"frame": frame_index, "bbox": list(bbox)}]
         self.assigned_zone: Optional[str] = None
         self.zone_confidence: Optional[float] = None
         self.orientation: Optional[str] = "forward"
 
-    def update(self, bbox: List[float], confidence: float, frame_index: int):
+    def update(self, bbox: List[float], confidence: float, frame_index: int, size_category: Optional[str] = None):
         self.bbox = list(bbox)
         self.confidence = confidence
         self.last_frame = frame_index
         self.time_since_update = 0
+        if size_category:
+            self.size_category = size_category
         self.history.append({"frame": frame_index, "bbox": list(bbox)})
-        if len(self.history) > 300:
+        if len(self.history) > 10000:
             self.history.pop(0)
 
     def mark_missed(self):
@@ -61,16 +66,18 @@ class PersonTracker:
     """
     Dedicated tracker for maintaining temporary visual track continuity in examination settings.
     Isolates person tracking state from vehicle ByteTrack instances.
+    Provides IoU + center distance association and smooth occlusion interpolation.
     """
-    def __init__(self, max_lost_frames: int = 30, iou_threshold: float = 0.30):
+    def __init__(self, max_lost_frames: int = 30, iou_threshold: float = 0.25, distance_threshold_px: float = 45.0):
         self.max_lost_frames = max_lost_frames
         self.iou_threshold = iou_threshold
+        self.distance_threshold_px = distance_threshold_px
         self.next_track_id = 1
         self.tracks: List[ExaminationPersonTrack] = []
 
     def update(self, raw_person_detections: List[Dict[str, Any]], frame_index: int) -> List[PersonDetection]:
         """
-        Associates incoming person detections with existing tracks using greedy IoU matching.
+        Associates incoming person detections with existing tracks using greedy IoU + spatial proximity.
         """
         for t in self.tracks:
             t.mark_missed()
@@ -79,14 +86,19 @@ class PersonTracker:
         matched_tracks = set()
 
         if self.tracks and raw_person_detections:
-            cost_matrix = np.zeros((len(self.tracks), len(raw_person_detections)), dtype=np.float32)
+            cost_matrix = np.full((len(self.tracks), len(raw_person_detections)), -1.0, dtype=np.float32)
             for i, trk in enumerate(self.tracks):
                 for j, det in enumerate(raw_person_detections):
-                    cost_matrix[i, j] = calculate_iou(trk.bbox, det["bbox"])
+                    iou = calculate_iou(trk.bbox, det["bbox"])
+                    dist = calculate_center_distance(trk.bbox, det["bbox"])
+                    if iou >= self.iou_threshold:
+                        cost_matrix[i, j] = iou
+                    elif dist <= self.distance_threshold_px:
+                        cost_matrix[i, j] = max(0.05, 1.0 - (dist / self.distance_threshold_px) * 0.8)
 
             while True:
-                max_val = np.max(cost_matrix) if cost_matrix.size > 0 else 0.0
-                if max_val < self.iou_threshold:
+                max_val = np.max(cost_matrix) if cost_matrix.size > 0 else -1.0
+                if max_val < 0.05:
                     break
                 trk_idx, det_idx = np.unravel_index(np.argmax(cost_matrix), cost_matrix.shape)
                 if trk_idx in matched_tracks or det_idx not in unmatched_dets:
@@ -94,7 +106,12 @@ class PersonTracker:
                     continue
 
                 det = raw_person_detections[det_idx]
-                self.tracks[trk_idx].update(det["bbox"], det["confidence"], frame_index)
+                self.tracks[trk_idx].update(
+                    det["bbox"],
+                    det["confidence"],
+                    frame_index,
+                    det.get("size_category")
+                )
                 matched_tracks.add(trk_idx)
                 unmatched_dets.remove(det_idx)
                 cost_matrix[trk_idx, :] = -1.0
@@ -106,7 +123,8 @@ class PersonTracker:
                 track_id=self.next_track_id,
                 bbox=det["bbox"],
                 confidence=det["confidence"],
-                frame_index=frame_index
+                frame_index=frame_index,
+                size_category=det.get("size_category", "medium")
             )
             self.next_track_id += 1
             self.tracks.append(new_trk)
@@ -121,6 +139,26 @@ class PersonTracker:
                         track_id=t.track_id,
                         bbox=t.bbox,
                         confidence=t.confidence,
+                        assigned_role=t.assigned_role,
+                        role_source=t.role_source,
+                        is_interpolated=False,
+                        size_category=t.size_category,
+                        assigned_zone=t.assigned_zone,
+                        zone_confidence=t.zone_confidence,
+                        posture_orientation=t.orientation
+                    )
+                )
+            elif t.time_since_update <= 2:
+                # Smooth brief occlusions so distant students do not flicker
+                active_persons.append(
+                    PersonDetection(
+                        track_id=t.track_id,
+                        bbox=t.bbox,
+                        confidence=round(t.confidence * 0.95, 4),
+                        assigned_role=t.assigned_role,
+                        role_source=t.role_source,
+                        is_interpolated=True,
+                        size_category=t.size_category,
                         assigned_zone=t.assigned_zone,
                         zone_confidence=t.zone_confidence,
                         posture_orientation=t.orientation
@@ -142,6 +180,10 @@ class PersonTracker:
                         track_id=t.track_id,
                         bbox=t.bbox,
                         confidence=round(t.confidence * 0.99, 4),
+                        assigned_role=t.assigned_role,
+                        role_source=t.role_source,
+                        is_interpolated=True,
+                        size_category=t.size_category,
                         assigned_zone=t.assigned_zone,
                         zone_confidence=t.zone_confidence,
                         posture_orientation=t.orientation

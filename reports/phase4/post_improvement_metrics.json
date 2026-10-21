@@ -1,0 +1,456 @@
+{
+  "evaluation_phase": "Phase 4.2 Post-Improvement Coverage Audit",
+  "summary": {
+    "total_ground_truth": 55,
+    "total_detected": 36,
+    "true_positives": 36,
+    "false_positives": 0,
+    "baseline_recall": 0.4464,
+    "post_calibration_recall": 0.6545,
+    "baseline_precision": 1.0,
+    "post_calibration_precision": 1.0,
+    "baseline_f1": 0.6173,
+    "post_calibration_f1": 0.7912,
+    "recall_gain_pct": 20.81
+  },
+  "frame_results": [
+    {
+      "description": "Exam 2.mp4: Frame 0",
+      "frame_idx": 0,
+      "gt_persons": 6,
+      "detected_persons": 5,
+      "true_positives": 5,
+      "false_positives": 0,
+      "false_negatives": 1,
+      "precision": 1.0,
+      "recall": 0.8333,
+      "detections": [
+        {
+          "bbox": [
+            346.0,
+            198.0,
+            455.0,
+            368.0
+          ],
+          "conf": 0.496,
+          "size_category": "medium"
+        },
+        {
+          "bbox": [
+            668.0,
+            124.0,
+            740.0,
+            265.0
+          ],
+          "conf": 0.438,
+          "size_category": "distant_small"
+        },
+        {
+          "bbox": [
+            742.0,
+            153.0,
+            810.0,
+            287.0
+          ],
+          "conf": 0.369,
+          "size_category": "distant_small"
+        },
+        {
+          "bbox": [
+            519.0,
+            111.0,
+            598.0,
+            238.0
+          ],
+          "conf": 0.266,
+          "size_category": "distant_small"
+        },
+        {
+          "bbox": [
+            612.0,
+            117.0,
+            681.0,
+            229.0
+          ],
+          "conf": 0.248,
+          "size_category": "distant_small"
+        }
+      ]
+    },
+    {
+      "description": "Exam 2.mp4: Frame 200",
+      "frame_idx": 200,
+      "gt_persons": 8,
+      "detected_persons": 6,
+      "true_positives": 6,
+      "false_positives": 0,
+      "false_negatives": 2,
+      "precision": 1.0,
+      "recall": 0.75,
+      "detections": [
+        {
+          "bbox": [
+            410.0,
+            212.0,
+            516.0,
+            385.0
+          ],
+          "conf": 0.53,
+          "size_category": "medium"
+        },
+        {
+          "bbox": [
+            718.0,
+            156.0,
+            801.0,
+            382.0
+          ],
+          "conf": 0.395,
+          "size_category": "medium"
+        },
+        {
+          "bbox": [
+            341.0,
+            183.0,
+            447.0,
+            369.0
+          ],
+          "conf": 0.379,
+          "size_category": "medium"
+        },
+        {
+          "bbox": [
+            653.0,
+            121.0,
+            751.0,
+            275.0
+          ],
+          "conf": 0.379,
+          "size_category": "medium"
+        },
+        {
+          "bbox": [
+            509.0,
+            131.0,
+            621.0,
+            382.0
+          ],
+          "conf": 0.316,
+          "size_category": "medium"
+        },
+        {
+          "bbox": [
+            578.0,
+            134.0,
+            637.0,
+            239.0
+          ],
+          "conf": 0.231,
+          "size_category": "distant_small"
+        }
+      ]
+    },
+    {
+      "description": "Exam 2.mp4: Frame 400",
+      "frame_idx": 400,
+      "gt_persons": 12,
+      "detected_persons": 8,
+      "true_positives": 8,
+      "false_positives": 0,
+      "false_negatives": 4,
+      "precision": 1.0,
+      "recall": 0.6667,
+      "detections": [
+        {
+          "bbox": [
+            659.0,
+            122.0,
+            747.0,
+            262.0
+          ],
+          "conf": 0.508,
+          "size_category": "distant_small"
+        },
+        {
+          "bbox": [
+            288.0,
+            94.0,
+            394.0,
+            199.0
+          ],
+          "conf": 0.444,
+          "size_category": "distant_small"
+        },
+        {
+          "bbox": [
+            515.0,
+            96.0,
+            625.0,
+            228.0
+          ],
+          "conf": 0.411,
+          "size_category": "distant_small"
+        },
+        {
+          "bbox": [
+            357.0,
+            204.0,
+            495.0,
+            360.0
+          ],
+          "conf": 0.373,
+          "size_category": "medium"
+        },
+        {
+          "bbox": [
+            602.0,
+            103.0,
+            669.0,
+            223.0
+          ],
+          "conf": 0.342,
+          "size_category": "distant_small"
+        },
+        {
+          "bbox": [
+            725.0,
+            155.0,
+            804.0,
+            371.0
+          ],
+          "conf": 0.329,
+          "size_category": "medium"
+        },
+        {
+          "bbox": [
+            734.0,
+            154.0,
+            802.0,
+            265.0
+          ],
+          "conf": 0.294,
+          "size_category": "distant_small"
+        },
+        {
+          "bbox": [
+            434.0,
+            83.0,
+            504.0,
+            151.0
+          ],
+          "conf": 0.272,
+          "size_category": "distant_small"
+        }
+      ]
+    },
+    {
+      "description": "Exam 2.mp4: Frame 600",
+      "frame_idx": 600,
+      "gt_persons": 13,
+      "detected_persons": 8,
+      "true_positives": 8,
+      "false_positives": 0,
+      "false_negatives": 5,
+      "precision": 1.0,
+      "recall": 0.6154,
+      "detections": [
+        {
+          "bbox": [
+            654.0,
+            200.0,
+            785.0,
+            367.0
+          ],
+          "conf": 0.805,
+          "size_category": "medium"
+        },
+        {
+          "bbox": [
+            423.0,
+            203.0,
+            522.0,
+            361.0
+          ],
+          "conf": 0.65,
+          "size_category": "medium"
+        },
+        {
+          "bbox": [
+            363.0,
+            204.0,
+            443.0,
+            347.0
+          ],
+          "conf": 0.433,
+          "size_category": "distant_small"
+        },
+        {
+          "bbox": [
+            263.0,
+            79.0,
+            333.0,
+            193.0
+          ],
+          "conf": 0.395,
+          "size_category": "distant_small"
+        },
+        {
+          "bbox": [
+            508.0,
+            121.0,
+            614.0,
+            364.0
+          ],
+          "conf": 0.393,
+          "size_category": "medium"
+        },
+        {
+          "bbox": [
+            430.0,
+            76.0,
+            497.0,
+            142.0
+          ],
+          "conf": 0.37,
+          "size_category": "distant_small"
+        },
+        {
+          "bbox": [
+            728.0,
+            137.0,
+            783.0,
+            200.0
+          ],
+          "conf": 0.285,
+          "size_category": "distant_small"
+        },
+        {
+          "bbox": [
+            650.0,
+            110.0,
+            739.0,
+            217.0
+          ],
+          "conf": 0.271,
+          "size_category": "distant_small"
+        }
+      ]
+    },
+    {
+      "description": "Exam 2.mp4: Frame 1000",
+      "frame_idx": 1000,
+      "gt_persons": 7,
+      "detected_persons": 3,
+      "true_positives": 3,
+      "false_positives": 0,
+      "false_negatives": 4,
+      "precision": 1.0,
+      "recall": 0.4286,
+      "detections": [
+        {
+          "bbox": [
+            651.0,
+            133.0,
+            738.0,
+            256.0
+          ],
+          "conf": 0.305,
+          "size_category": "distant_small"
+        },
+        {
+          "bbox": [
+            726.0,
+            157.0,
+            793.0,
+            250.0
+          ],
+          "conf": 0.247,
+          "size_category": "distant_small"
+        },
+        {
+          "bbox": [
+            288.0,
+            114.0,
+            390.0,
+            217.0
+          ],
+          "conf": 0.202,
+          "size_category": "distant_small"
+        }
+      ]
+    },
+    {
+      "description": "Exam 2.mp4: Frame 1400",
+      "frame_idx": 1400,
+      "gt_persons": 9,
+      "detected_persons": 6,
+      "true_positives": 6,
+      "false_positives": 0,
+      "false_negatives": 3,
+      "precision": 1.0,
+      "recall": 0.6667,
+      "detections": [
+        {
+          "bbox": [
+            43.0,
+            173.0,
+            131.0,
+            384.0
+          ],
+          "conf": 0.58,
+          "size_category": "medium"
+        },
+        {
+          "bbox": [
+            100.0,
+            125.0,
+            171.0,
+            218.0
+          ],
+          "conf": 0.443,
+          "size_category": "distant_small"
+        },
+        {
+          "bbox": [
+            658.0,
+            116.0,
+            746.0,
+            277.0
+          ],
+          "conf": 0.399,
+          "size_category": "distant_small"
+        },
+        {
+          "bbox": [
+            721.0,
+            91.0,
+            754.0,
+            166.0
+          ],
+          "conf": 0.309,
+          "size_category": "distant_small"
+        },
+        {
+          "bbox": [
+            578.0,
+            129.0,
+            639.0,
+            238.0
+          ],
+          "conf": 0.294,
+          "size_category": "distant_small"
+        },
+        {
+          "bbox": [
+            46.0,
+            172.0,
+            119.0,
+            271.0
+          ],
+          "conf": 0.223,
+          "size_category": "distant_small"
+        }
+      ]
+    }
+  ]
+}

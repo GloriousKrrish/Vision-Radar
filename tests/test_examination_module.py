@@ -24,7 +24,7 @@ def test_examination_detector_init():
     """Verify ExaminationDetector initializes cleanly with ONNX model."""
     detector = ExaminationDetector()
     assert detector.input_size == (416, 416)
-    assert detector.confidence_threshold == 0.25
+    assert detector.confidence_threshold == 0.20
 
 def test_person_tracker_association():
     """Verify PersonTracker generates sequential track IDs and maintains spatial continuity."""

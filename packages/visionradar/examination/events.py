@@ -71,12 +71,16 @@ class ExaminationEventEngine:
         # 1. Event: POSSIBLE_PHONE_INTERACTION
         # Robust temporal windowing: requires >= 3 phone observations within a
         # 45-frame (1.5s) window. Tolerates intermittent hand occlusion.
+        # Authorized staff (invigilator / coordinator) are strictly excluded.
         # --------------------------------------------------------------------
-        phones = [o for o in objects if o.object_class == "cell phone"]
+        phones = [o for o in objects if o.object_class in ("cell phone", "candidate_electronic_device")]
         persons_with_phone: Set[int] = set()
 
         for phone in phones:
             for p in persons:
+                if getattr(p, "assigned_role", "UNKNOWN") in ("INVIGILATOR", "EXAM_COORDINATOR", "AUTHORIZED_STAFF"):
+                    continue
+
                 dist = bbox_distance(phone.bbox, p.bbox)
                 p_diag = float(np.hypot(p.bbox[2] - p.bbox[0], p.bbox[3] - p.bbox[1]))
                 is_associated = (phone.near_person_track_id == p.track_id) or (dist < max(90.0, p_diag * 0.70))
@@ -96,7 +100,9 @@ class ExaminationEventEngine:
                         "assoc_status": getattr(phone, "association_status", "INTERACTING"),
                         "distance": dist,
                         "bbox": phone.bbox,
-                        "obj_track_id": getattr(phone, "object_track_id", None)
+                        "obj_track_id": getattr(phone, "object_track_id", None),
+                        "discrimination_status": getattr(phone, "discrimination_status", "CONFIRMED"),
+                        "candidate_types": getattr(phone, "candidate_types", ["cell phone"])
                     })
                     self._phone_inactivity_frames[p.track_id] = 0
 
@@ -104,6 +110,9 @@ class ExaminationEventEngine:
         window_size_frames = int(round(self.fps * 1.5))  # 45 frames (1.5s)
         for p in persons:
             p_id = p.track_id
+            if getattr(p, "assigned_role", "UNKNOWN") in ("INVIGILATOR", "EXAM_COORDINATOR", "AUTHORIZED_STAFF"):
+                continue
+
             obs_list = self._phone_observations.get(p_id, [])
 
             # Filter observations within recent sliding window
@@ -137,6 +146,14 @@ class ExaminationEventEngine:
                     uncertainty_reasons.append("INTERMITTENT_HAND_OCCLUSION")
                 if mean_assoc < 0.70:
                     uncertainty_reasons.append("DESK_PROXIMITY_MARGINAL")
+                
+                # Check for calculator ambiguity
+                has_calc_ambiguity = any(o.get("discrimination_status") == "UNCERTAIN_ELECTRONIC_DEVICE" for o in recent_obs)
+                if has_calc_ambiguity:
+                    uncertainty_reasons.append("COCO_TAXONOMY_CALCULATOR_AMBIGUITY")
+
+                desc_label = "handheld electronic device (phone / calculator)" if has_calc_ambiguity else "cell phone"
+                priority_val = "AMBER" if has_calc_ambiguity else "RED"
 
                 if event_key not in self._active_events:
                     evt = ExaminationEvent(
@@ -149,21 +166,22 @@ class ExaminationEventEngine:
                         start_time=round(earliest_time, 2),
                         end_time=round(timestamp_s, 2),
                         person_track_id=p_id,
+                        assigned_role=getattr(p, "assigned_role", "UNKNOWN"),
                         associated_object_track_id=recent_obs[-1].get("obj_track_id"),
-                        associated_object_class="cell phone",
-                        supporting_objects=["cell phone"],
+                        associated_object_class=desc_label,
+                        supporting_objects=[desc_label],
                         supporting_frames=list(dict.fromkeys(frames)),
                         confidence=round(peak_conf, 3),
                         uncertainty=0.15,
-                        priority="RED",
+                        priority=priority_val,
                         evidence_strength=strength,
                         detection_confidence=round(mean_conf, 3),
                         association_confidence=round(mean_assoc, 3),
                         event_confidence=heuristic_score,
                         uncertainty_reasons=uncertainty_reasons,
-                        supporting_observations=f"Cell phone detected in {len(recent_obs)} frames adjacent to Track #{p_id}. Peak detection conf: {peak_conf * 100:.1f}%. Mean association: {mean_assoc * 100:.1f}%.",
+                        supporting_observations=f"{desc_label.capitalize()} detected in {len(recent_obs)} frames adjacent to Track #{p_id}. Peak detection conf: {peak_conf * 100:.1f}%. Mean association: {mean_assoc * 100:.1f}%.",
                         visibility_warnings=["Partial hand occlusion observed across intermittent frames"] if "INTERMITTENT_HAND_OCCLUSION" in uncertainty_reasons else [],
-                        description=f"Observable electronic device / cell phone detected in physical reach of Track #{p_id} across {duration_s:.1f}s ({len(recent_obs)} supporting frames)",
+                        description=f"Observable {desc_label} detected in physical reach of Track #{p_id} across {duration_s:.1f}s ({len(recent_obs)} supporting frames)",
                         review_status="PENDING"
                     )
                     self._active_events[event_key] = evt
@@ -179,7 +197,7 @@ class ExaminationEventEngine:
                     evt.association_confidence = round(mean_assoc, 3)
                     evt.event_confidence = heuristic_score
                     evt.evidence_strength = strength
-                    evt.description = f"Observable electronic device / cell phone detected in physical reach of Track #{p_id} across {duration_s:.1f}s ({len(all_frames)} supporting frames)"
+                    evt.description = f"Observable {desc_label} detected in physical reach of Track #{p_id} across {duration_s:.1f}s ({len(all_frames)} supporting frames)"
 
             # Inactivity tracking: decay and complete inactive phone events
             if p_id not in persons_with_phone:
@@ -192,9 +210,13 @@ class ExaminationEventEngine:
 
         # --------------------------------------------------------------------
         # 2. Event: RESTRICTED_ZONE_ENTRY
-        # Person enters a designated restricted zone for >= 5 frames
+        # Person enters a designated restricted zone for >= 5 frames.
+        # Authorized staff (invigilator / coordinator) are authorized to be at podiums.
         # --------------------------------------------------------------------
         for p in persons:
+            if getattr(p, "assigned_role", "UNKNOWN") in ("INVIGILATOR", "EXAM_COORDINATOR", "AUTHORIZED_STAFF"):
+                continue
+
             if p.assigned_zone in restricted_zones:
                 z_id = p.assigned_zone
                 curr_zone, streak = self._restricted_zone_streaks.get(p.track_id, (z_id, 0))
@@ -217,6 +239,7 @@ class ExaminationEventEngine:
                         start_time=max(0.0, round(timestamp_s - (streak / self.fps), 2)),
                         end_time=round(timestamp_s, 2),
                         person_track_id=p.track_id,
+                        assigned_role=getattr(p, "assigned_role", "UNKNOWN"),
                         supporting_objects=[],
                         supporting_frames=[frame_index],
                         confidence=0.88,
@@ -239,11 +262,14 @@ class ExaminationEventEngine:
         # 3. Event: LEAVING_SEATING_ZONE
         # STRICT REQUIREMENT: Only active if configured seating zones exist AND
         # the person was previously established as seated in a valid zone for >= 10 frames.
-        # If no seating zones exist in the room, this event must NEVER fire.
+        # Authorized staff (invigilator / coordinator) are naturally mobile.
         # --------------------------------------------------------------------
         if seating_zones:
             for p in persons:
                 p_id = p.track_id
+                if getattr(p, "assigned_role", "UNKNOWN") in ("INVIGILATOR", "EXAM_COORDINATOR", "AUTHORIZED_STAFF"):
+                    continue
+
                 if p.assigned_zone in seating_zones:
                     self._person_assigned_seat[p_id] = p.assigned_zone
                     self._vacated_zone_streaks[p_id] = 0
@@ -264,6 +290,7 @@ class ExaminationEventEngine:
                             start_time=max(0.0, round(timestamp_s - (streak / self.fps), 2)),
                             end_time=round(timestamp_s, 2),
                             person_track_id=p_id,
+                            assigned_role=getattr(p, "assigned_role", "UNKNOWN"),
                             supporting_objects=[],
                             supporting_frames=[frame_index],
                             confidence=0.82,
@@ -282,8 +309,10 @@ class ExaminationEventEngine:
 
         # --------------------------------------------------------------------
         # 4. Event: POSSIBLE_OBJECT_TRANSFER
-        # An object appears within close spatial proximity to two distinct persons
+        # An object appears within close spatial proximity to two distinct students.
+        # Proctors handing materials to students are excluded.
         # --------------------------------------------------------------------
+        person_map = {p.track_id: p for p in persons}
         for obj in objects:
             if obj.object_class in ("book", "cell phone"):
                 near_persons = []
@@ -292,8 +321,18 @@ class ExaminationEventEngine:
                     if d < 120.0:
                         near_persons.append(p.track_id)
                 if len(near_persons) >= 2:
-                    p1, p2 = min(near_persons[0], near_persons[1]), max(near_persons[0], near_persons[1])
-                    event_key = f"transfer:{p1}:{p2}"
+                    p1_id, p2_id = min(near_persons[0], near_persons[1]), max(near_persons[0], near_persons[1])
+                    p1_obj = person_map.get(p1_id)
+                    p2_obj = person_map.get(p2_id)
+                    p1_role = getattr(p1_obj, "assigned_role", "UNKNOWN")
+                    p2_role = getattr(p2_obj, "assigned_role", "UNKNOWN")
+                    staff_roles = ("INVIGILATOR", "EXAM_COORDINATOR", "AUTHORIZED_STAFF")
+
+                    # If either is confirmed staff, handing materials is normal invigilation
+                    if p1_role in staff_roles or p2_role in staff_roles:
+                        continue
+
+                    event_key = f"transfer:{p1_id}:{p2_id}"
                     if event_key not in self._active_events:
                         evt = ExaminationEvent(
                             event_id=f"evt_trans_{uuid.uuid4().hex[:8]}",
@@ -304,7 +343,8 @@ class ExaminationEventEngine:
                             end_frame=frame_index,
                             start_time=round(timestamp_s, 2),
                             end_time=round(timestamp_s, 2),
-                            person_track_id=p1,
+                            person_track_id=p1_id,
+                            assigned_role=p1_role,
                             associated_object_class=obj.object_class,
                             supporting_objects=[obj.object_class],
                             supporting_frames=[frame_index],
@@ -315,8 +355,8 @@ class ExaminationEventEngine:
                             detection_confidence=round(obj.confidence, 3),
                             association_confidence=0.70,
                             event_confidence=0.72,
-                            supporting_observations=f"Object '{obj.object_class}' observed in shared proximity between Track #{p1} and Track #{p2}",
-                            description=f"Observable proximity interaction of {obj.object_class} between Track #{p1} and Track #{p2}",
+                            supporting_observations=f"Object '{obj.object_class}' observed in shared proximity between Track #{p1_id} and Track #{p2_id}",
+                            description=f"Observable proximity interaction of {obj.object_class} between Track #{p1_id} and Track #{p2_id}",
                             review_status="PENDING"
                         )
                         self._active_events[event_key] = evt
@@ -324,10 +364,14 @@ class ExaminationEventEngine:
 
         # --------------------------------------------------------------------
         # 5. Event: GAZE_DEVIATION
-        # Sustained lateral head turn / body orientation toward peer or lap
+        # Sustained lateral head turn / body orientation toward peer or lap.
+        # Staff looking around the classroom are excluded.
         # --------------------------------------------------------------------
         for p in persons:
             p_id = p.track_id
+            if getattr(p, "assigned_role", "UNKNOWN") in ("INVIGILATOR", "EXAM_COORDINATOR", "AUTHORIZED_STAFF"):
+                continue
+
             orientation = p.posture_orientation or "forward"
             w = max(1.0, p.bbox[2] - p.bbox[0])
             h = max(1.0, p.bbox[3] - p.bbox[1])
@@ -350,6 +394,7 @@ class ExaminationEventEngine:
                         start_time=max(0.0, round(timestamp_s - (streak / self.fps), 2)),
                         end_time=round(timestamp_s, 2),
                         person_track_id=p_id,
+                        assigned_role=getattr(p, "assigned_role", "UNKNOWN"),
                         supporting_objects=[],
                         supporting_frames=[frame_index],
                         confidence=0.76,
@@ -378,12 +423,21 @@ class ExaminationEventEngine:
 
         # --------------------------------------------------------------------
         # 6. Event: PEER_PROXIMITY
-        # Sustained physical convergence or closeness between two seated candidates
+        # Sustained physical convergence or closeness between two seated candidates.
+        # Proctors walking next to students are strictly excluded.
         # --------------------------------------------------------------------
         if len(persons) >= 2:
             for i in range(len(persons)):
                 for j in range(i + 1, len(persons)):
                     p1, p2 = persons[i], persons[j]
+                    p1_role = getattr(p1, "assigned_role", "UNKNOWN")
+                    p2_role = getattr(p2, "assigned_role", "UNKNOWN")
+                    staff_roles = ("INVIGILATOR", "EXAM_COORDINATOR", "AUTHORIZED_STAFF")
+
+                    # If either is authorized staff, proximity is legitimate supervision
+                    if p1_role in staff_roles or p2_role in staff_roles:
+                        continue
+
                     dist = bbox_distance(p1.bbox, p2.bbox)
                     p1_w = p1.bbox[2] - p1.bbox[0]
                     p2_w = p2.bbox[2] - p2.bbox[0]
@@ -406,6 +460,7 @@ class ExaminationEventEngine:
                                 start_time=max(0.0, round(timestamp_s - (streak / self.fps), 2)),
                                 end_time=round(timestamp_s, 2),
                                 person_track_id=pair_key[0],
+                                assigned_role=p1_role,
                                 supporting_objects=[],
                                 supporting_frames=[frame_index],
                                 confidence=0.78,

@@ -1,0 +1,72 @@
+{
+  "timestamp": "2026-10-21T09:15:00Z",
+  "person_detection_baseline": {
+    "dataset": "Exam 2.mp4 (real-world classroom footage, 6 audited keyframes)",
+    "average_precision": 1.0,
+    "average_recall": 0.4456,
+    "keyframe_breakdown": [
+      {
+        "frame": 0,
+        "gt_people": 6,
+        "detected_people": 3,
+        "precision": 1.0,
+        "recall": 0.5,
+        "missed": 3
+      },
+      {
+        "frame": 200,
+        "gt_people": 8,
+        "detected_people": 5,
+        "precision": 1.0,
+        "recall": 0.625,
+        "missed": 3
+      },
+      {
+        "frame": 400,
+        "gt_people": 12,
+        "detected_people": 6,
+        "precision": 1.0,
+        "recall": 0.5,
+        "missed": 6
+      },
+      {
+        "frame": 600,
+        "gt_people": 13,
+        "detected_people": 6,
+        "precision": 1.0,
+        "recall": 0.46153846153846156,
+        "missed": 7
+      },
+      {
+        "frame": 1000,
+        "gt_people": 7,
+        "detected_people": 1,
+        "precision": 1.0,
+        "recall": 0.14285714285714285,
+        "missed": 6
+      },
+      {
+        "frame": 1400,
+        "gt_people": 9,
+        "detected_people": 4,
+        "precision": 1.0,
+        "recall": 0.4444444444444444,
+        "missed": 5
+      }
+    ]
+  },
+  "tracking_baseline": {
+    "dataset": "Exam 2.mp4 (400 frames)",
+    "total_tracks_spawned": 11,
+    "average_active_tracks_per_frame": 3.09,
+    "throughput_fps": 23.68
+  },
+  "object_discrimination_baseline": {
+    "dataset": "exam cheat.mp4 (449 frames)",
+    "phone_detections": 8,
+    "book_detections": 80,
+    "calculator_detections": 0,
+    "calculator_supported_in_coco": false,
+    "discriminator_status": "COCO taxonomy limitation (no calculator class)"
+  }
+}

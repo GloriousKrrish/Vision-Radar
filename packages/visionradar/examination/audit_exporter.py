@@ -81,6 +81,7 @@ class ForensicAuditExporter:
                 "evidence_strength": ev_strength,
                 "supporting_objects": supp_objs,
                 "description": e.description,
+                "assigned_role": getattr(e, "assigned_role", "UNKNOWN") or "UNKNOWN",
                 "review_status": e.review_status,
                 "reviewer_notes": e.reviewer_notes
             })
@@ -88,8 +89,62 @@ class ForensicAuditExporter:
         # Sort chronologically
         events_payload.sort(key=lambda x: x["start_time"])
 
+        # Role breakdown & track continuity analysis
+        person_tracks = [t for t in tracks if t.entity_type == "person"]
+        role_breakdown = {
+            "STUDENT": 0,
+            "INVIGILATOR": 0,
+            "EXAM_COORDINATOR": 0,
+            "AUTHORIZED_STAFF": 0,
+            "UNKNOWN": 0
+        }
+        track_summaries = []
+        for t in person_tracks:
+            r = getattr(t, "assigned_role", "UNKNOWN") or "UNKNOWN"
+            role_breakdown[r] = role_breakdown.get(r, 0) + 1
+            history = t.trajectory_json or []
+            dur_frames = max(1, (t.last_frame - t.first_frame + 1))
+            coverage_pct = round(min(100.0, (len(history) / dur_frames) * 100.0), 1)
+            track_summaries.append({
+                "track_id": t.track_id,
+                "assigned_role": r,
+                "role_source": getattr(t, "role_source", "DEFAULT") or "DEFAULT",
+                "first_frame": t.first_frame,
+                "last_frame": t.last_frame,
+                "duration_frames": dur_frames,
+                "history_points": len(history),
+                "continuity_coverage_pct": coverage_pct,
+                "assigned_zone": t.assigned_zone
+            })
+
+        # Group candidate events by track ID
+        events_by_track: Dict[str, List[Dict[str, Any]]] = {}
+        for ev in events_payload:
+            trk_key = f"track_{ev.get('person_track_id', 'unassociated')}"
+            if trk_key not in events_by_track:
+                events_by_track[trk_key] = []
+            events_by_track[trk_key].append(ev)
+
+        # Technical & Ethical Disclosures
+        disclosures = {
+            "calculator_discrimination": (
+                "Standard MS-COCO 80 taxonomy lacks a dedicated 'calculator' category. "
+                "Small handheld rectangular devices are evaluated under calibrated aspect-ratio heuristics. "
+                "Ambiguous objects are explicitly classified as 'UNCERTAIN_ELECTRONIC_DEVICE' rather than forced "
+                "into cell phone classification, and require physical invigilator verification."
+            ),
+            "ethical_proctoring_standard": (
+                "VisionRadar enforces a strict zero-accusation principle. Automated candidate alerts reflect objective visual "
+                "observations and do NOT declare student guilt or innocence. Human proctor corroboration is strictly required."
+            ),
+            "tracking_continuity_limitations": (
+                "Temporary visual occlusions up to 2 frames are smoothly interpolated. Distant students (< 0.05 normalized height) "
+                "or individuals walking outside camera bounds may experience track fragmentation upon re-entry."
+            )
+        }
+
         report_payload = {
-            "report_version": "2.0.0",
+            "report_version": "2.1.0",
             "report_id": f"VR-EXAM-AUDIT-{job_id}-{int(datetime.datetime.now().timestamp())}",
             "generated_at": utcnow_str(),
             "job_id": job_id,
@@ -112,13 +167,16 @@ class ForensicAuditExporter:
                 "average_throughput_fps": telemetry.get("avg_fps", 18.5)
             },
             "summary_metrics": {
-                "total_person_tracks": len(tracks),
+                "total_person_tracks": len(person_tracks),
                 "total_candidate_events": len(events),
+                "role_breakdown": role_breakdown,
                 "priority_breakdown": priority_counts,
                 "event_type_breakdown": type_counts,
                 "proctor_review_summary": review_counts,
                 "configured_zones_count": len(zones)
             },
+            "track_continuity_analysis": track_summaries,
+            "events_grouped_by_track": events_by_track,
             "events_timeline": events_payload,
             "configured_zones": [
                 {
@@ -128,7 +186,8 @@ class ForensicAuditExporter:
                     "polygon": z.polygon_json
                 }
                 for z in zones
-            ]
+            ],
+            "disclosures": disclosures
         }
 
         # Generate cryptographic audit seal over canonical JSON
@@ -144,17 +203,20 @@ class ForensicAuditExporter:
         vm = report.get("video_metadata", {})
         prov = report.get("pipeline_provenance", {})
         metrics = report.get("summary_metrics", {})
+        roles = metrics.get("role_breakdown", {})
         events = report.get("events_timeline", [])
+        disclosures = report.get("disclosures", {})
         seal = report.get("cryptographic_seal", "VR-SEAL-PENDING")
 
         event_rows = ""
         for ev in events:
             priority_color = "#dc2626" if ev["priority"] == "RED" else ("#d97706" if ev["priority"] == "AMBER" else "#2563eb")
             status_color = "#16a34a" if ev["review_status"] == "ACCEPTED" else ("#dc2626" if ev["review_status"] == "REJECTED" else "#d97706")
+            role_badge = f'<span style="background: #e2e8f0; color: #334155; padding: 2px 6px; border-radius: 3px; font-size: 10px; font-weight: 700;">{ev.get("assigned_role", "UNKNOWN")}</span>'
             event_rows += f"""
             <tr style="border-bottom: 1px solid #e2e8f0;">
                 <td style="padding: 10px; font-family: monospace; font-size: 13px;">{ev['start_time']}s – {ev['end_time']}s</td>
-                <td style="padding: 10px; font-family: monospace;">#{ev.get('person_track_id', '-')}</td>
+                <td style="padding: 10px; font-family: monospace;">#{ev.get('person_track_id', '-')} {role_badge}</td>
                 <td style="padding: 10px;">
                     <span style="background: {priority_color}15; color: {priority_color}; padding: 3px 8px; border-radius: 4px; font-weight: 600; font-size: 12px;">
                         {ev['event_type']}
@@ -196,7 +258,7 @@ class ForensicAuditExporter:
         align-items: flex-start;
         border-bottom: 2px solid #0f172a;
         padding-bottom: 20px;
-        margin-bottom: 30px;
+        margin-bottom: 25px;
     }}
     .title {{
         font-size: 24px;
@@ -221,18 +283,18 @@ class ForensicAuditExporter:
     .grid-kpi {{
         display: grid;
         grid-template-columns: repeat(4, 1fr);
-        gap: 15px;
-        margin-bottom: 30px;
+        gap: 12px;
+        margin-bottom: 20px;
     }}
     .card-kpi {{
         background: #f8fafc;
         border: 1px solid #e2e8f0;
         border-radius: 8px;
-        padding: 16px;
+        padding: 14px;
         text-align: center;
     }}
     .card-kpi .val {{
-        font-size: 26px;
+        font-size: 24px;
         font-weight: 800;
         color: #0f172a;
     }}
@@ -243,11 +305,21 @@ class ForensicAuditExporter:
         color: #64748b;
         margin-top: 4px;
     }}
+    .disclosure-box {{
+        background: #f8fafc;
+        border-left: 4px solid #6366f1;
+        padding: 12px 16px;
+        margin: 20px 0;
+        border-radius: 0 6px 6px 0;
+        font-size: 12px;
+        line-height: 1.5;
+        color: #334155;
+    }}
     .section-title {{
-        font-size: 16px;
+        font-size: 15px;
         font-weight: 700;
-        margin-top: 30px;
-        margin-bottom: 15px;
+        margin-top: 25px;
+        margin-bottom: 12px;
         border-left: 4px solid #2563eb;
         padding-left: 10px;
     }}
@@ -271,7 +343,7 @@ class ForensicAuditExporter:
     .meta-table td.label {{
         font-weight: 600;
         color: #475569;
-        width: 200px;
+        width: 220px;
     }}
     .no-print {{
         margin-bottom: 20px;
@@ -319,6 +391,21 @@ class ForensicAuditExporter:
             <div class="lbl">Persons Tracked</div>
         </div>
         <div class="card-kpi">
+            <div class="val" style="color: #2563eb;">{roles.get('STUDENT', 0)}</div>
+            <div class="lbl">Students</div>
+        </div>
+        <div class="card-kpi">
+            <div class="val" style="color: #0891b2;">{roles.get('INVIGILATOR', 0) + roles.get('AUTHORIZED_STAFF', 0) + roles.get('EXAM_COORDINATOR', 0)}</div>
+            <div class="lbl">Authorized Staff</div>
+        </div>
+        <div class="card-kpi">
+            <div class="val" style="color: #64748b;">{roles.get('UNKNOWN', 0)}</div>
+            <div class="lbl">Unknown Roles</div>
+        </div>
+    </div>
+
+    <div class="grid-kpi">
+        <div class="card-kpi">
             <div class="val">{metrics.get('total_candidate_events', 0)}</div>
             <div class="lbl">Candidate Events</div>
         </div>
@@ -328,11 +415,21 @@ class ForensicAuditExporter:
         </div>
         <div class="card-kpi">
             <div class="val" style="color: #16a34a;">{metrics.get('proctor_review_summary', {}).get('ACCEPTED', 0)}</div>
-            <div class="lbl">Proctor Confirmed</div>
+            <div class="lbl">Proctor Accepted</div>
+        </div>
+        <div class="card-kpi">
+            <div class="val" style="color: #d97706;">{metrics.get('proctor_review_summary', {}).get('PENDING', 0)}</div>
+            <div class="lbl">Pending Review</div>
         </div>
     </div>
 
-    <div class="section-title">Session & Video Provenance</div>
+    <div class="disclosure-box">
+        <b>⚖️ Ethical Standard &amp; Non-Accusation Principle:</b> {disclosures.get('ethical_proctoring_standard', 'Proctor-in-the-loop review mandatory.')}
+        <br/><br/>
+        <b>🔬 Object Taxonomy &amp; Calculator Discrimination:</b> {disclosures.get('calculator_discrimination', 'COCO model lacks calculator class; handheld electronics are treated as uncertain devices requiring human confirmation.')}
+    </div>
+
+    <div class="section-title">Session &amp; Video Provenance</div>
     <table class="meta-table" style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; width: 100%; margin-bottom: 20px;">
         <tr><td class="label">Job ID:</td><td>#{report.get('job_id')}</td></tr>
         <tr><td class="label">Video Filename:</td><td>{vm.get('filename')}</td></tr>
@@ -342,12 +439,12 @@ class ForensicAuditExporter:
         <tr><td class="label">Auditing Standard:</td><td>Strict Evidence-First Tripartite Protocol (Local Detector + Gemini AI + Human Proctor)</td></tr>
     </table>
 
-    <div class="section-title">Observable Event Timeline & Verification</div>
+    <div class="section-title">Observable Event Timeline &amp; Verification</div>
     <table>
         <thead>
             <tr>
                 <th>Timeline</th>
-                <th>Track</th>
+                <th>Track &amp; Role</th>
                 <th>Candidate Event</th>
                 <th>Confidence</th>
                 <th>Factual Observation</th>

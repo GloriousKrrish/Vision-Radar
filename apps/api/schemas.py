@@ -127,3 +127,7 @@ class GeminiAnalysisRequestPayload(BaseModel):
     model_override: Optional[str] = None
     force_refresh: bool = False
 
+class ExaminationRoleUpdatePayload(BaseModel):
+    role: str  # STUDENT, INVIGILATOR, EXAM_COORDINATOR, AUTHORIZED_STAFF, UNKNOWN
+    reviewer_notes: Optional[str] = None
+

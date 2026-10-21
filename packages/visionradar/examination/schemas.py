@@ -12,6 +12,13 @@ class ExaminationEventType(str, Enum):
     PEER_PROXIMITY = "PEER_PROXIMITY"
     OTHER_OBSERVABLE_INTERACTION = "OTHER_OBSERVABLE_INTERACTION"
 
+class ExaminationRole(str, Enum):
+    STUDENT = "STUDENT"
+    INVIGILATOR = "INVIGILATOR"
+    EXAM_COORDINATOR = "EXAM_COORDINATOR"
+    AUTHORIZED_STAFF = "AUTHORIZED_STAFF"
+    UNKNOWN = "UNKNOWN"
+
 class ZoneType(str, Enum):
     SEATING_ZONE = "SEATING_ZONE"
     RESTRICTED_ZONE = "RESTRICTED_ZONE"
@@ -37,6 +44,10 @@ class PersonDetection(BaseModel):
     track_id: int = Field(..., description="Temporary visual track identifier (not a biometric identity)")
     bbox: List[float] = Field(..., description="Bounding box [x1, y1, x2, y2]")
     confidence: float = Field(..., ge=0.0, le=1.0)
+    assigned_role: str = Field(default="UNKNOWN", description="STUDENT | INVIGILATOR | EXAM_COORDINATOR | AUTHORIZED_STAFF | UNKNOWN")
+    role_source: str = Field(default="DEFAULT", description="CONFIG | ZONE | HUMAN_REVIEW | DEFAULT")
+    is_interpolated: bool = Field(default=False, description="Whether box was maintained through brief occlusion")
+    size_category: Optional[str] = Field(default="medium", description="distant_small | medium | foreground")
     assigned_zone: Optional[str] = Field(default=None, description="Associated seating zone ID if within polygon")
     zone_confidence: Optional[float] = Field(default=None, description="Spatial membership confidence")
     posture_orientation: Optional[str] = Field(default=None, description="Coarse orientation: forward | lateral_left | lateral_right")
@@ -47,6 +58,10 @@ class PersonDetection(BaseModel):
             "track_id": self.track_id,
             "bbox": [round(c, 2) for c in self.bbox],
             "confidence": round(self.confidence, 4),
+            "assigned_role": self.assigned_role,
+            "role_source": self.role_source,
+            "is_interpolated": self.is_interpolated,
+            "size_category": self.size_category,
             "assigned_zone": self.assigned_zone,
             "zone_confidence": round(self.zone_confidence, 4) if self.zone_confidence is not None else None,
             "posture_orientation": self.posture_orientation,
@@ -57,9 +72,11 @@ class ExaminationObjectDetection(BaseModel):
     """Detected physical object relevant to examination observation."""
     object_id: int = Field(..., description="Object observation sequence ID")
     object_track_id: Optional[int] = Field(default=None, description="Persistent visual track ID for object")
-    object_class: str = Field(..., description="Class: cell phone | paper | book | laptop | desk")
+    object_class: str = Field(..., description="Class: cell phone | paper | book | laptop | desk | candidate_electronic_device")
     bbox: List[float] = Field(..., description="Bounding box [x1, y1, x2, y2]")
     confidence: float = Field(..., ge=0.0, le=1.0)
+    discrimination_status: str = Field(default="CONFIRMED", description="CONFIRMED | UNCERTAIN_ELECTRONIC_DEVICE")
+    candidate_types: List[str] = Field(default_factory=list, description="Candidate categories e.g. ['cell phone', 'calculator', 'unknown']")
     near_person_track_id: Optional[int] = Field(default=None, description="Track ID of associated person")
     association_status: str = Field(default="UNASSOCIATED", description="INTERACTING | NEARBY | AMBIGUOUS | UNASSOCIATED")
     association_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
@@ -72,6 +89,8 @@ class ExaminationObjectDetection(BaseModel):
             "object_class": self.object_class,
             "bbox": [round(c, 2) for c in self.bbox],
             "confidence": round(self.confidence, 4),
+            "discrimination_status": self.discrimination_status,
+            "candidate_types": self.candidate_types,
             "near_person_track_id": self.near_person_track_id,
             "association_status": self.association_status,
             "association_confidence": round(self.association_confidence, 4),
@@ -93,6 +112,7 @@ class ExaminationEvent(BaseModel):
     start_time: float = Field(..., ge=0.0, description="Start timestamp in seconds")
     end_time: float = Field(..., ge=0.0, description="End timestamp in seconds")
     person_track_id: Optional[int] = Field(default=None, description="Primary associated temporary track ID")
+    assigned_role: str = Field(default="UNKNOWN", description="Assigned role of subject")
     associated_object_track_id: Optional[int] = Field(default=None, description="Associated object track ID")
     associated_object_class: Optional[str] = Field(default=None, description="Associated object category")
     supporting_objects: List[str] = Field(default_factory=list, description="Associated object classes detected")
@@ -125,6 +145,7 @@ class ExaminationEvent(BaseModel):
             "start_time": round(self.start_time, 2),
             "end_time": round(self.end_time, 2),
             "person_track_id": self.person_track_id,
+            "assigned_role": self.assigned_role,
             "associated_object_track_id": self.associated_object_track_id,
             "associated_object_class": self.associated_object_class,
             "supporting_objects": self.supporting_objects,

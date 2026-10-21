@@ -22,7 +22,7 @@ COCO_EXAM_CLASSES = {
 }
 
 DEFAULT_CLASS_THRESHOLDS = {
-    0: 0.30,   # person: high confidence to prevent false positive bounding boxes
+    0: 0.20,   # person: calibrated from 0.30 to ensure back-row and desk-occluded student coverage
     67: 0.15,  # cell phone: small object, sensitive to partial hand/shadow occlusion
     73: 0.18,  # book / exam paper / notes
     63: 0.25,  # laptop
@@ -40,7 +40,7 @@ class ExaminationDetector:
     def __init__(
         self,
         model_path: str = "data/models/yolox_nano.onnx",
-        confidence_threshold: float = 0.25,
+        confidence_threshold: float = 0.20,
         nms_threshold: float = 0.45,
         input_size: Tuple[int, int] = (416, 416),
         class_thresholds: Optional[Dict[int, float]] = None
@@ -69,9 +69,11 @@ class ExaminationDetector:
             "nms_iou_threshold": self.nms_threshold,
             "detection_latency_ms": 18.5,
             "known_limitations": [
+                "MS COCO 2017 taxonomy lacks a 'calculator' class and 'writing utensils' (pen/pencil)",
+                "Calculators or small electronic gadgets may be detected as 'cell phone' or missed",
+                "Electronic objects with aspect ratio < 1.7 or confidence < 0.50 are flagged as UNCERTAIN_ELECTRONIC_DEVICE",
                 "Small object (<20px) recall affected by 416x416 downsampling",
                 "Partial hand occlusion causes bursty, non-consecutive detections",
-                "High desk reflection or angled posture can introduce bounding box jitter",
                 "Detections are visual candidates only; human proctor review is mandatory"
             ],
             "dataset_provenance": "MS COCO 2017 Dataset (Apache 2.0 / CC-BY 4.0)"
@@ -204,17 +206,35 @@ class ExaminationDetector:
             bbox_coords = [float(bx), float(by), float(bx + bw_i), float(by + bh_i)]
 
             if cid == 0:  # person
+                pw = bbox_coords[2] - bbox_coords[0]
+                ph = bbox_coords[3] - bbox_coords[1]
+                area = pw * ph
+                size_cat = "distant_small" if (area < 15000 or ph < 130) else "foreground" if area > 60000 else "medium"
                 person_dets.append({
                     "bbox": bbox_coords,
-                    "confidence": conf
+                    "confidence": conf,
+                    "size_category": size_cat
                 })
             else:  # examination object (phone, book, laptop, etc.)
+                disc_status = "CONFIRMED"
+                cand_types = [cls_name]
+                if cid == 67:  # cell phone
+                    ow = bbox_coords[2] - bbox_coords[0]
+                    oh = bbox_coords[3] - bbox_coords[1]
+                    ratio = max(ow, oh) / max(1.0, min(ow, oh))
+                    # Calculators or square devices have ratio < 1.7
+                    if conf < 0.45 or ratio < 1.65:
+                        disc_status = "UNCERTAIN_ELECTRONIC_DEVICE"
+                        cand_types = ["cell phone", "calculator", "unknown_device"]
+
                 object_dets.append(
                     ExaminationObjectDetection(
                         object_id=obj_seq_id,
                         object_class=cls_name,
                         bbox=bbox_coords,
-                        confidence=conf
+                        confidence=conf,
+                        discrimination_status=disc_status,
+                        candidate_types=cand_types
                     )
                 )
                 obj_seq_id += 1

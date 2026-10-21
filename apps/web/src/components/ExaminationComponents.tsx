@@ -706,6 +706,9 @@ interface ExamOverviewProps {
   acceptedReviews: number;
   activeZones: number;
   pipelineStatus: string;
+  studentCount?: number;
+  staffCount?: number;
+  unknownCount?: number;
 }
 
 export const ExaminationOverviewCard: React.FC<ExamOverviewProps> = ({
@@ -714,7 +717,10 @@ export const ExaminationOverviewCard: React.FC<ExamOverviewProps> = ({
   pendingReviews,
   acceptedReviews,
   activeZones,
-  pipelineStatus
+  pipelineStatus,
+  studentCount = 0,
+  staffCount = 0,
+  unknownCount = 0
 }) => {
   return (
     <div className="card" style={{ marginTop: '16px' }}>
@@ -750,7 +756,33 @@ export const ExaminationOverviewCard: React.FC<ExamOverviewProps> = ({
         ))}
       </div>
 
-      <div style={{ display: 'flex', gap: '16px', fontSize: '11px', color: '#64748B', paddingTop: '8px', borderTop: '1px solid #E2E8F0' }}>
+      <div style={{ display: 'flex', gap: '8px', alignItems: 'center', margin: '8px 0', flexWrap: 'wrap' }}>
+        <span style={{ fontSize: '11px', color: '#64748B', fontWeight: 600 }}>ROSTER ROLES:</span>
+        <span style={{ background: '#EFF6FF', color: '#1D4ED8', padding: '2px 8px', borderRadius: '12px', fontSize: '11px', fontWeight: 700 }}>
+          🎓 {studentCount} Students
+        </span>
+        <span style={{ background: '#ECFEFF', color: '#0E7490', padding: '2px 8px', borderRadius: '12px', fontSize: '11px', fontWeight: 700 }}>
+          🛡️ {staffCount} Authorized Staff
+        </span>
+        <span style={{ background: '#F1F5F9', color: '#475569', padding: '2px 8px', borderRadius: '12px', fontSize: '11px', fontWeight: 700 }}>
+          ❓ {unknownCount} Unknown
+        </span>
+      </div>
+
+      <div style={{
+        margin: '8px 0',
+        padding: '8px 12px',
+        background: '#F8FAFC',
+        borderLeft: '3px solid #6366F1',
+        borderRadius: '0 4px 4px 0',
+        fontSize: '11px',
+        color: '#475569',
+        lineHeight: '1.4'
+      }}>
+        <b>🔬 Object Taxonomy Note:</b> COCO 80 lacks an explicit <i>calculator</i> class. Handheld electronic devices are flagged as candidate electronic objects under geometric aspect-ratio heuristics; physical proctor inspection is required before any violation finding.
+      </div>
+
+      <div style={{ display: 'flex', gap: '16px', fontSize: '11px', color: '#64748B', paddingTop: '8px', borderTop: '1px solid #E2E8F0', flexWrap: 'wrap' }}>
         <span>Configured Seating Zones: <b style={{ color: '#4F46E5' }}>{activeZones} zones</b></span>
         <span>Ethical AI Standard: <b style={{ color: '#059669' }}>Proctor-in-the-Loop (Zero Automated Accusations)</b></span>
         <span>Pipeline Status: <b style={{ color: '#10B981' }}>{pipelineStatus}</b></span>
@@ -932,6 +964,19 @@ export const ExaminationEventsTable: React.FC<ExamTableProps> = ({
                       }}>
                         Person #{evt.person_track_id}
                       </span>
+                      {evt.assigned_role && evt.assigned_role !== 'UNKNOWN' && (
+                        <span style={{
+                          marginLeft: '4px',
+                          padding: '2px 5px',
+                          borderRadius: '3px',
+                          fontSize: '9px',
+                          fontWeight: 700,
+                          background: evt.assigned_role === 'INVIGILATOR' ? '#CFFAFE' : '#F1F5F9',
+                          color: evt.assigned_role === 'INVIGILATOR' ? '#0891B2' : '#475569'
+                        }}>
+                          {evt.assigned_role}
+                        </span>
+                      )}
                     </td>
                     <td style={{ padding: '8px', color: '#334155' }}>
                       {evt.start_time.toFixed(1)}s–{(evt.end_time || evt.start_time).toFixed(1)}s

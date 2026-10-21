@@ -40,7 +40,8 @@ from apps.api.schemas import (
     JobCreate, JobResponse,
     ViolationResponse, ViolationReviewUpdate,
     SpeedLimitConfigPayload, SpeedLimitConfigResponse,
-    GeminiStatusResponse, GeminiAnalysisRequestPayload
+    GeminiStatusResponse, GeminiAnalysisRequestPayload,
+    ExaminationRoleUpdatePayload
 )
 
 try:
@@ -1444,6 +1445,8 @@ def get_job_common_results(job_id: int, db: Session = Depends(get_db)):
                         "first_frame": t.first_frame,
                         "last_frame": t.last_frame,
                         "assigned_zone": t.assigned_zone,
+                        "assigned_role": getattr(t, "assigned_role", "UNKNOWN") or "UNKNOWN",
+                        "role_source": getattr(t, "role_source", "DEFAULT") or "DEFAULT",
                         "trajectory": t.trajectory_json
                     }
                     for t in tracks
@@ -1457,6 +1460,7 @@ def get_job_common_results(job_id: int, db: Session = Depends(get_db)):
                         "start_time": e.start_time,
                         "end_time": e.end_time,
                         "person_track_id": e.person_track_id,
+                        "assigned_role": getattr(e, "assigned_role", "UNKNOWN") or "UNKNOWN",
                         "supporting_objects": e.supporting_objects_json or [],
                         "confidence": e.confidence,
                         "uncertainty": e.uncertainty,
@@ -1530,6 +1534,7 @@ def get_examination_job_results(job_id: int, db: Session = Depends(get_db)):
             "start_time": e.start_time,
             "end_time": e.end_time,
             "person_track_id": e.person_track_id,
+            "assigned_role": getattr(e, "assigned_role", "UNKNOWN") or "UNKNOWN",
             "associated_object_track_id": details.get("associated_object_track_id"),
             "associated_object_class": details.get("associated_object_class"),
             "supporting_objects": supp_objs,
@@ -1574,6 +1579,8 @@ def get_examination_job_results(job_id: int, db: Session = Depends(get_db)):
                 "first_frame": t.first_frame,
                 "last_frame": t.last_frame,
                 "assigned_zone": t.assigned_zone,
+                "assigned_role": getattr(t, "assigned_role", "UNKNOWN") or "UNKNOWN",
+                "role_source": getattr(t, "role_source", "DEFAULT") or "DEFAULT",
                 "trajectory": t.trajectory_json
             }
             for t in tracks
@@ -1588,6 +1595,60 @@ def get_examination_job_results(job_id: int, db: Session = Depends(get_db)):
             }
             for z in zones
         ]
+    }
+
+
+@app.patch("/api/v1/jobs/{job_id}/examination/tracks/{track_id}/role")
+def update_examination_track_role(
+    job_id: int,
+    track_id: int,
+    payload: ExaminationRoleUpdatePayload,
+    db: Session = Depends(get_db)
+):
+    """
+    Allows proctor or administrator to confirm or reassign a person's role (e.g. STUDENT -> INVIGILATOR).
+    Records role_source as 'HUMAN_CONFIRMED' with reviewer notes.
+    If role is updated to authorized staff, suppresses student-specific candidate alerts for that track.
+    """
+    valid_roles = {"STUDENT", "INVIGILATOR", "EXAM_COORDINATOR", "AUTHORIZED_STAFF", "UNKNOWN"}
+    target_role = payload.role.upper().strip()
+    if target_role not in valid_roles:
+        raise HTTPException(status_code=400, detail=f"Invalid role '{payload.role}'. Must be one of: {list(valid_roles)}")
+
+    track = db.query(ExaminationTrackRecord).filter(
+        ExaminationTrackRecord.job_id == job_id,
+        ExaminationTrackRecord.track_id == track_id,
+        ExaminationTrackRecord.entity_type == "person"
+    ).first()
+
+    if not track:
+        raise HTTPException(status_code=404, detail=f"Person track #{track_id} not found in Job #{job_id}")
+
+    track.assigned_role = target_role
+    track.role_source = "HUMAN_CONFIRMED"
+
+    # Update all associated events for this person
+    events = db.query(ExaminationEventRecord).filter(
+        ExaminationEventRecord.job_id == job_id,
+        ExaminationEventRecord.person_track_id == track_id
+    ).all()
+
+    is_staff = target_role in {"INVIGILATOR", "EXAM_COORDINATOR", "AUTHORIZED_STAFF"}
+    for ev in events:
+        ev.assigned_role = target_role
+        if is_staff and ev.review_status == "PENDING":
+            ev.review_status = "REJECTED"
+            ev.reviewer_notes = f"Auto-suppressed: Track #{track_id} confirmed as authorized staff ({target_role}). {payload.reviewer_notes or ''}".strip()
+
+    db.commit()
+
+    return {
+        "status": "SUCCESS",
+        "job_id": job_id,
+        "track_id": track_id,
+        "assigned_role": target_role,
+        "role_source": "HUMAN_CONFIRMED",
+        "affected_events_count": len(events)
     }
 
 

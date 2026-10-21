@@ -325,6 +325,8 @@ class ExaminationTrackRecord(Base):
     job_id = Column(Integer, ForeignKey("processing_jobs.id"), nullable=False, index=True)
     track_id = Column(Integer, nullable=False, index=True)
     entity_type = Column(String(32), nullable=False, default="person")  # person, object
+    assigned_role = Column(String(32), nullable=False, default="UNKNOWN")  # STUDENT, INVIGILATOR, EXAM_COORDINATOR, AUTHORIZED_STAFF, UNKNOWN
+    role_source = Column(String(32), nullable=False, default="DEFAULT")    # CONFIG, ZONE, HUMAN_REVIEW, DEFAULT
     first_frame = Column(Integer, nullable=False)
     last_frame = Column(Integer, nullable=False)
     assigned_zone = Column(String(64), nullable=True)
@@ -345,6 +347,7 @@ class ExaminationEventRecord(Base):
     start_time = Column(Float, nullable=False)
     end_time = Column(Float, nullable=False)
     person_track_id = Column(Integer, nullable=True)
+    assigned_role = Column(String(32), nullable=False, default="UNKNOWN")
     supporting_objects_json = Column(JSON, nullable=True)
     confidence = Column(Float, nullable=False, default=0.8)
     uncertainty = Column(Float, nullable=False, default=0.1)

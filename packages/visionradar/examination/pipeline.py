@@ -53,9 +53,13 @@ def run_examination_job(job_id: int):
         _emit(job_id, {"type": "error", "job_id": job_id, "message": job.error_message})
         return
 
-    # Extract user-configured seating zones from job config if provided
+    # Extract user-configured seating zones and roles from job config
     config = job.config_json or {}
     configured_zones_raw = config.get("zones", [])
+    configured_roles = config.get("roles", {})
+    default_role = config.get("default_role", "UNKNOWN")
+    podium_is_staff_zone = config.get("podium_is_staff_zone", True)
+
     configured_zones = []
     for z in configured_zones_raw:
         try:
@@ -176,7 +180,33 @@ def run_examination_job(job_id: int):
         for p in active_persons:
             seating_manager.associate_person(p)
 
-        # Evaluate sequential observable events
+        # Apply configurable role mapping (configured roles > staff zones > default role > UNKNOWN)
+        for p in active_persons:
+            trk_id_str = str(p.track_id)
+            if trk_id_str in configured_roles:
+                r_entry = configured_roles[trk_id_str]
+                if isinstance(r_entry, dict):
+                    p.assigned_role = r_entry.get("role", "UNKNOWN")
+                    p.role_source = r_entry.get("source", "CONFIG")
+                else:
+                    p.assigned_role = str(r_entry)
+                    p.role_source = "CONFIG"
+            elif p.assigned_zone and podium_is_staff_zone:
+                matching_zone = next((z for z in seating_manager.get_zones() if z.zone_id == p.assigned_zone), None)
+                if matching_zone and matching_zone.zone_type == ZoneType.RESTRICTED_PODIUM:
+                    p.assigned_role = "INVIGILATOR"
+                    p.role_source = "ZONE_MAPPING"
+            elif default_role != "UNKNOWN" and p.assigned_role == "UNKNOWN":
+                p.assigned_role = default_role
+                p.role_source = "DEFAULT"
+
+            # Mirror role to underlying tracker track
+            underlying_t = next((t for t in tracker.tracks if t.track_id == p.track_id), None)
+            if underlying_t:
+                underlying_t.assigned_role = p.assigned_role
+                underlying_t.role_source = p.role_source
+
+        # Evaluate sequential observable events (strictly excludes authorized staff from student cheating candidates)
         active_events = event_engine.process_frame(
             frame_index=frame_index,
             timestamp_s=timestamp_s,
@@ -237,7 +267,7 @@ def run_examination_job(job_id: int):
         job.progress_pct = 100.0
         job.completed_at = utcnow()
 
-        # Persist person tracks
+        # Persist person tracks with verified role metadata
         for t in tracker.tracks:
             traj_data = [{"frame": h["frame"], "bbox": h["bbox"]} for h in t.history]
             trk_rec = ExaminationTrackRecord(
@@ -247,6 +277,8 @@ def run_examination_job(job_id: int):
                 first_frame=t.first_frame,
                 last_frame=t.last_frame,
                 assigned_zone=t.assigned_zone,
+                assigned_role=t.assigned_role,
+                role_source=t.role_source,
                 trajectory_json=traj_data
             )
             db.add(trk_rec)
@@ -293,6 +325,7 @@ def run_examination_job(job_id: int):
                 start_time=evt.start_time,
                 end_time=evt.end_time,
                 person_track_id=evt.person_track_id,
+                assigned_role=evt.assigned_role,
                 supporting_objects_json=evidence_details,
                 confidence=evt.confidence,
                 uncertainty=evt.uncertainty,
