@@ -243,43 +243,84 @@ def stream_video(video_id: int, request: Request, range: Optional[str] = Header(
         raise HTTPException(status_code=404, detail="Video file not found")
 
     file_size = os.path.getsize(video.storage_path)
+    mime_type = "video/webm" if video.storage_path.lower().endswith(".webm") else "video/mp4"
+
     if request.method == "HEAD":
         headers = {
             'Accept-Ranges': 'bytes',
             'Content-Length': str(file_size),
-            'Content-Type': 'video/mp4',
+            'Content-Type': mime_type,
         }
         return Response(status_code=200, headers=headers)
 
-    if range is None:
-        return FileResponse(video.storage_path, media_type="video/mp4")
+    if not range or not range.strip().startswith("bytes="):
+        headers = {'Accept-Ranges': 'bytes'}
+        return FileResponse(video.storage_path, media_type=mime_type, headers=headers)
 
-    # Parse byte range header
-    start_str, end_str = range.replace("bytes=", "").split("-")
-    start = int(start_str)
-    end = int(end_str) if end_str else file_size - 1
-    chunk_size = (end - start) + 1
+    # Parse RFC 7233 byte range header safely
+    try:
+        range_spec = range.strip()[6:].split(",")[0].strip()
+        parts = range_spec.split("-")
+        if len(parts) != 2:
+            return FileResponse(video.storage_path, media_type=mime_type, headers={'Accept-Ranges': 'bytes'})
 
-    CHUNK = 128 * 1024
-    def send_bytes():
-        with open(video.storage_path, "rb") as f:
-            f.seek(start)
-            remaining = chunk_size
-            while remaining > 0:
-                read_len = min(remaining, CHUNK)
-                data = f.read(read_len)
-                if not data:
-                    break
-                remaining -= len(data)
-                yield data
+        start_str, end_str = parts[0].strip(), parts[1].strip()
+        if not start_str and not end_str:
+            return FileResponse(video.storage_path, media_type=mime_type, headers={'Accept-Ranges': 'bytes'})
 
-    headers = {
-        'Content-Range': f'bytes {start}-{end}/{file_size}',
-        'Accept-Ranges': 'bytes',
-        'Content-Length': str(chunk_size),
-        'Content-Type': 'video/mp4',
-    }
-    return StreamingResponse(send_bytes(), status_code=206, headers=headers)
+        if not start_str:
+            # Suffix range: bytes=-1024 (last 1024 bytes)
+            suffix_len = int(end_str)
+            if suffix_len <= 0:
+                start = file_size
+            else:
+                start = max(0, file_size - suffix_len)
+            end = file_size - 1
+        elif not end_str:
+            # Open-ended range: bytes=1024-
+            start = int(start_str)
+            end = file_size - 1
+        else:
+            # Closed range: bytes=1024-2048
+            start = int(start_str)
+            end = int(end_str)
+
+        # RFC 7233 out-of-bounds bounds check
+        if start < 0 or start >= file_size or start > end:
+            return Response(
+                status_code=416,
+                headers={
+                    'Content-Range': f'bytes */{file_size}',
+                    'Accept-Ranges': 'bytes'
+                }
+            )
+
+        end = min(end, file_size - 1)
+        chunk_size = (end - start) + 1
+
+        CHUNK = 128 * 1024
+        def send_bytes():
+            with open(video.storage_path, "rb") as f:
+                f.seek(start)
+                remaining = chunk_size
+                while remaining > 0:
+                    read_len = min(remaining, CHUNK)
+                    data = f.read(read_len)
+                    if not data:
+                        break
+                    remaining -= len(data)
+                    yield data
+
+        headers = {
+            'Content-Range': f'bytes {start}-{end}/{file_size}',
+            'Accept-Ranges': 'bytes',
+            'Content-Length': str(chunk_size),
+            'Content-Type': mime_type,
+        }
+        return StreamingResponse(send_bytes(), status_code=206, headers=headers)
+    except Exception as err:
+        print(f"[stream_video] Error parsing Range header '{range}': {err}")
+        return FileResponse(video.storage_path, media_type=mime_type, headers={'Accept-Ranges': 'bytes'})
 
 # --- Calibration API ---
 @app.post("/api/v1/videos/{video_id}/calibrations", response_model=CalibrationResponse)
@@ -575,11 +616,24 @@ async def websocket_job_stream(websocket: WebSocket, job_id: int):
             pass
 
 @app.get("/api/v1/jobs", response_model=List[JobResponse])
-def list_jobs(status: Optional[str] = None, db: Session = Depends(get_db)):
+def list_jobs(
+    status: Optional[str] = None,
+    domain: Optional[str] = None,
+    limit: Optional[int] = 50,
+    db: Session = Depends(get_db)
+):
     query = db.query(ProcessingJob)
     if status:
         query = query.filter(ProcessingJob.status == status)
-    jobs = query.order_by(ProcessingJob.created_at.desc()).all()
+    if domain:
+        if domain == "examination":
+            query = query.filter(ProcessingJob.domain == "examination")
+        else:
+            query = query.filter(ProcessingJob.domain != "examination")
+    query = query.order_by(ProcessingJob.id.desc())
+    if limit is not None and limit > 0:
+        query = query.limit(limit)
+    jobs = query.all()
     return [serialize_job_response(job) for job in jobs]
 
 @app.get("/api/v1/jobs/latest", response_model=JobResponse)
@@ -755,6 +809,12 @@ def get_track_provenance(track_id: int, db: Session = Depends(get_db)):
 def list_violations(job_id: Optional[int] = None, limit: int = 50, db: Session = Depends(get_db)):
     query = db.query(Violation)
     if job_id is not None:
+        target_job = db.query(ProcessingJob).filter(ProcessingJob.id == job_id).first()
+        if target_job and target_job.domain != "traffic":
+            raise HTTPException(
+                status_code=400,
+                detail=f"Job #{job_id} belongs to '{target_job.domain}' domain. Traffic violations are only available for traffic jobs."
+            )
         query = query.filter(Violation.job_id == job_id)
     viols = query.order_by(Violation.id.desc()).limit(limit).all()
     if not viols:
@@ -866,6 +926,11 @@ def get_job_speed_limit(job_id: int, db: Session = Depends(get_db)):
     job = db.query(ProcessingJob).filter(ProcessingJob.id == job_id).first()
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
+    if job.domain != "traffic":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Job #{job_id} belongs to '{job.domain}' domain. Speed limit configuration is only available for traffic jobs."
+        )
     cfg = job.config_json or {}
     limit = float(cfg.get("speed_limit_kmh", 80.0))
     tol = float(cfg.get("warning_tolerance_kmh", 0.0))
@@ -888,6 +953,11 @@ def set_job_speed_limit(job_id: int, payload: SpeedLimitConfigPayload, db: Sessi
     job = db.query(ProcessingJob).filter(ProcessingJob.id == job_id).first()
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
+    if job.domain != "traffic":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Job #{job_id} belongs to '{job.domain}' domain. Speed limit configuration is only available for traffic jobs."
+        )
 
     cfg = dict(job.config_json or {})
     cfg["speed_limit_kmh"] = payload.speed_limit_kmh
@@ -1060,6 +1130,11 @@ def get_job_accident_candidates(job_id: int, db: Session = Depends(get_db)):
     job = db.query(ProcessingJob).filter(ProcessingJob.id == job_id).first()
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
+    if job.domain != "traffic":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Job #{job_id} belongs to '{job.domain}' domain. Accident candidates are only available for traffic jobs."
+        )
 
     telemetry = job.telemetry_json or {}
     acc_intel = telemetry.get("accident_intelligence") or {}
@@ -1322,6 +1397,11 @@ def generate_pdf_report(job_id: int, db: Session = Depends(get_db)):
     job = db.query(ProcessingJob).filter(ProcessingJob.id == job_id).first()
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
+    if job.domain != "traffic":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Job #{job_id} belongs to '{job.domain}' domain. Traffic PDF report is only available for traffic jobs. For examination jobs, use the examination audit report endpoint."
+        )
 
     video = db.query(Video).filter(Video.id == job.video_id).first()
     project = db.query(Project).filter(Project.id == video.project_id).first()
@@ -1562,7 +1642,15 @@ def get_job_common_results(job_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Job not found")
 
     video = db.query(Video).filter(Video.id == job.video_id).first()
-    module = (job.config_json or {}).get("module", "traffic")
+    cfg = job.config_json or {}
+    raw_mod = getattr(job, "domain", None)
+    cfg_mod = cfg.get("domain") or cfg.get("module")
+    if cfg_mod and "exam" in str(cfg_mod).lower():
+        module = "examination"
+    elif raw_mod and "exam" in str(raw_mod).lower():
+        module = "examination"
+    else:
+        module = "traffic"
 
     if module == "examination":
         tracks = db.query(ExaminationTrackRecord).filter(ExaminationTrackRecord.job_id == job_id).all()

@@ -21,7 +21,7 @@ export interface SharedJobContextType {
   activeJobId: number | null;
   activeJob: ProcessingJobRecord | null;
   activeDomain: 'traffic' | 'examination';
-  setDomain: (domain: 'traffic' | 'examination') => void;
+  setDomain: (domain: 'traffic' | 'examination', preserveJobId?: number) => void;
   isLoadingJob: boolean;
   jobList: ProcessingJobRecord[];
   selectJob: (jobId: number) => Promise<void>;
@@ -68,9 +68,15 @@ export const SharedJobProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         const data: ProcessingJobRecord[] = await res.json();
         setJobList(data);
 
-        // If no active job selected yet, auto-select latest
+        // If no active job selected yet, auto-select latest matching activeDomain
         if (!activeJobId && data.length > 0) {
-          selectJob(data[0].id);
+          const matching = data.find(j => {
+            const d = (j.domain || ((j.config_json || {}).domain || (j.config_json || {}).module || '').toLowerCase());
+            return activeDomain === 'examination' ? d.includes('exam') : !d.includes('exam');
+          });
+          if (matching) {
+            selectJob(matching.id);
+          }
         }
       }
     } catch (err) {
@@ -139,7 +145,7 @@ export const SharedJobProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   }, [activeJob]);
 
   // Change authoritative domain without mutating any existing running jobs
-  const setDomain = useCallback((targetDomain: 'traffic' | 'examination') => {
+  const setDomain = useCallback(async (targetDomain: 'traffic' | 'examination', preserveJobId?: number) => {
     setActiveDomain(targetDomain);
     try {
       localStorage.setItem('visionradar_active_domain', targetDomain);
@@ -147,28 +153,49 @@ export const SharedJobProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       // ignore localStorage error
     }
 
+    if (preserveJobId) {
+      if (activeJobId !== preserveJobId) {
+        selectJob(preserveJobId);
+      }
+      return;
+    }
+
     // Determine current active job domain
     const currentJobDomain = activeJob
       ? (activeJob.domain || ((activeJob.config_json || {}).domain || (activeJob.config_json || {}).module || '').toLowerCase().includes('exam') ? 'examination' : 'traffic')
       : null;
 
-    if (currentJobDomain !== targetDomain) {
-      // Find latest job in jobList belonging to the target domain
-      const matchingJob = jobList.find(j => {
-        const d = (j.domain || ((j.config_json || {}).domain || (j.config_json || {}).module || '').toLowerCase());
-        return targetDomain === 'examination' ? d.includes('exam') : !d.includes('exam');
-      });
-      if (matchingJob) {
-        selectJob(matchingJob.id);
-      } else {
-        setActiveJobId(null);
-        setActiveJob(null);
-        try {
-          localStorage.removeItem('visionradar_active_job_id');
-        } catch {}
-      }
+    if (currentJobDomain === targetDomain && activeJobId !== null) {
+      return; // Already aligned with target domain
     }
-  }, [activeJob, jobList, selectJob]);
+
+    // Look for matching job in candidate list or fetch freshly
+    let candidateList = jobList;
+    if (!candidateList || candidateList.length === 0) {
+      try {
+        const res = await fetch(apiUrl('/api/v1/jobs?status=SUCCEEDED&limit=30'));
+        if (res.ok) {
+          candidateList = await res.json();
+          setJobList(candidateList);
+        }
+      } catch {}
+    }
+
+    const matchingJob = candidateList.find(j => {
+      const d = (j.domain || ((j.config_json || {}).domain || (j.config_json || {}).module || '').toLowerCase());
+      return targetDomain === 'examination' ? d.includes('exam') : !d.includes('exam');
+    });
+
+    if (matchingJob) {
+      selectJob(matchingJob.id);
+    } else {
+      setActiveJobId(null);
+      setActiveJob(null);
+      try {
+        localStorage.removeItem('visionradar_active_job_id');
+      } catch {}
+    }
+  }, [activeJob, activeJobId, jobList, selectJob]);
 
   const openExportModal = (jobId?: number) => {
     setExportTargetJobId(jobId || activeJobId);

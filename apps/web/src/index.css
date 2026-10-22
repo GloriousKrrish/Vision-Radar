@@ -72,9 +72,11 @@ nav button.on {
 }
 
 main {
-  padding: 14px;
-  max-width: 1400px;
-  margin: auto;
+  padding: 16px 20px;
+  max-width: min(98vw, 2400px);
+  width: 100%;
+  margin: 0 auto;
+  box-sizing: border-box;
 }
 
 .tab {
@@ -87,11 +89,12 @@ main {
 
 .grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 320px;
-  gap: 14px;
+  grid-template-columns: minmax(0, 1fr) clamp(340px, 25vw, 440px);
+  gap: 16px;
+  align-items: start;
 }
 
-@media (max-width: 960px) {
+@media (max-width: 1024px) {
   .grid {
     grid-template-columns: 1fr;
   }

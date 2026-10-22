@@ -212,6 +212,7 @@ export const WorkbenchView: React.FC = () => {
   const pipelineStageRef = useRef<PipelineStage>('IDLE');
   const activeJobIdRef = useRef<number | null>(null);
   const activeModuleRef = useRef<AnalysisModule>(activeModule);
+  const prevSharedJobIdRef = useRef<number | null>(null);
   const lastFrameRef = useRef<number>(-1);
 
   useEffect(() => { isRealVideoRef.current = isRealVideo; }, [isRealVideo]);
@@ -338,6 +339,11 @@ export const WorkbenchView: React.FC = () => {
 
       setActiveModule(jobModule);
       activeModuleRef.current = jobModule;
+      prevSharedJobIdRef.current = jobId;
+      setSceneRec(null);
+      if (activeDomain !== jobModule) {
+        setDomain(jobModule, jobId);
+      }
 
       // Clear frame buffers
       rtFrameBufferRef.current.clear();
@@ -499,12 +505,14 @@ export const WorkbenchView: React.FC = () => {
       if (jobData.video_id) {
         setActiveVideoId(jobData.video_id);
         const streamUrl = apiUrl(`/api/v1/videos/${jobData.video_id}/stream`);
-        setVideoSrc(streamUrl);
-        if (videoRef.current) {
-          videoRef.current.src = streamUrl;
-          videoRef.current.load();
-          videoRef.current.play().catch(() => {});
-        }
+        setVideoSrc(prev => (prev && prev.startsWith('blob:') ? prev : streamUrl));
+        setIsRealVideo(true);
+        isRealVideoRef.current = true;
+        setPlaybackError(null);
+        fetch(apiUrl(`/api/v1/videos/${jobData.video_id}`))
+          .then(r => r.json())
+          .then(v => { if (v?.filename) setSrcName(v.filename); })
+          .catch(() => {});
       }
 
       if (jobData?.telemetry) {
@@ -528,36 +536,73 @@ export const WorkbenchView: React.FC = () => {
   useEffect(() => {
     // 1. If a shared job is selected from the header, sync to it immediately (if not actively streaming)
     if (sharedJobId && sharedJobId !== activeJobIdRef.current && !isLiveStreamingRef.current) {
+      prevSharedJobIdRef.current = sharedJobId;
       setActiveJobId(sharedJobId);
       activeJobIdRef.current = sharedJobId;
       loadJobResults(sharedJobId);
       return;
     }
 
-    // 2. If idle on startup, auto-load the latest succeeded job matching activeDomain
+    // Only clear if sharedJobId transitioned from a non-null job to null (explicit deselect / domain clear)
+    if (sharedJobId === null && prevSharedJobIdRef.current !== null && !isLiveStreamingRef.current && activeJobIdRef.current !== null) {
+      prevSharedJobIdRef.current = null;
+      setActiveJobId(null);
+      activeJobIdRef.current = null;
+      setActiveVideoId(null);
+      setVideoSrc(null);
+      setRealTracks([]);
+      setViolations([]);
+      setRealCalib(null);
+      setExamTracks([]);
+      setExamObjectTracks([]);
+      setExamEvents([]);
+      setExamZones([]);
+      setPrimaryExamFinding(null);
+      rtFrameBufferRef.current.clear();
+      frameMapRef.current.clear();
+      seenRef.current.clear();
+      setSelTrack(null);
+      setSelectedPersonId(null);
+      lastRenderedFrameIdRef.current = -1;
+      setPipelineStage('IDLE');
+      setJobStatusText(null);
+      return;
+    }
+
+    // 2. If idle on startup, auto-load the latest succeeded job matching activeDomain strictly
     if (pipelineStage === 'IDLE' && !activeJobIdRef.current) {
       const selectCompletedJob = async () => {
         try {
-          const res = await fetch(apiUrl('/api/v1/jobs?status=SUCCEEDED'));
+          const res = await fetch(apiUrl('/api/v1/jobs?status=SUCCEEDED&limit=50'));
           if (!res.ok) return;
           const jobs = await res.json();
           if (!jobs?.length) return;
 
           const targetDomain = activeDomain || activeModuleRef.current || 'traffic';
+          // Prefer job that has detected tracks
           let matchingJob = jobs.find((j: any) => {
             const authDomain = (j.domain || (j.config_json || {}).domain || (j.config_json || {}).module || '').toLowerCase();
-            return targetDomain === 'examination' ? authDomain.includes('exam') : !authDomain.includes('exam');
+            const isMatch = targetDomain === 'examination' ? authDomain.includes('exam') : !authDomain.includes('exam');
+            return isMatch && (j.telemetry?.total_tracks > 0 || j.telemetry?.person_tracks_count > 0);
           });
-
           if (!matchingJob) {
-            matchingJob = jobs[0];
+            matchingJob = jobs.find((j: any) => {
+              const authDomain = (j.domain || (j.config_json || {}).domain || (j.config_json || {}).module || '').toLowerCase();
+              return targetDomain === 'examination' ? authDomain.includes('exam') : !authDomain.includes('exam');
+            });
           }
 
+          // STRICT ISOLATION: Never fall back to jobs of a different domain!
           if (matchingJob) {
+            prevSharedJobIdRef.current = matchingJob.id;
             setActiveJobId(matchingJob.id);
             activeJobIdRef.current = matchingJob.id;
             selectSharedJob(matchingJob.id);
             loadJobResults(matchingJob.id);
+          } else {
+            // No matching job in targetDomain — maintain clean empty state
+            setActiveJobId(null);
+            activeJobIdRef.current = null;
           }
         } catch (e) {
           console.error('Domain-scoped auto-load failed:', e);
@@ -1790,17 +1835,29 @@ export const WorkbenchView: React.FC = () => {
         cx.fillText(playbackError, W / 2, H / 2 + 12);
         cx.fillStyle = '#64748B'; cx.font = '11px sans-serif';
         cx.fillText('Backend AI processing may still be running or completed independently.', W / 2, H / 2 + 32);
-      } else {
-        const titleText = activeModule === 'examination' ? 'Loading Classroom Examination Video...' : 'Loading Real Traffic Video...';
-        const subtitleText = activeModule === 'examination'
-          ? 'Preparing high-resolution video stream for examination intelligence...'
-          : 'Select or upload a real video file to begin YOLOX + ByteTrack analysis';
-        cx.fillStyle = activeModule === 'examination' ? '#6366F1' : '#4F46E5';
+      } else if (videoSrc && (!videoRef.current || videoRef.current.readyState < 2)) {
+        const titleText = activeModule === 'examination' ? 'Connecting to Classroom Video Stream...' : 'Connecting to Traffic Video Stream...';
+        const subtitleText = 'Decoding high-resolution video frames for live AI tracking HUD...';
+        cx.fillStyle = activeModule === 'examination' ? '#818CF8' : '#38BDF8';
         cx.font = 'bold 16px sans-serif';
         cx.textAlign = 'center';
         cx.fillText(titleText, W / 2, H / 2 - 10);
-        cx.fillStyle = '#64748B'; cx.font = '12px sans-serif';
+        cx.fillStyle = '#94A3B8'; cx.font = '12px sans-serif';
         cx.fillText(subtitleText, W / 2, H / 2 + 18);
+      } else {
+        const isExam = activeModule === 'examination';
+        const titleText = isExam ? '🎓 Examination Intelligence Workbench' : '🚗 Traffic Intelligence Workbench';
+        const subtitleText = isExam
+          ? 'Upload an exam video or click "Sample Exam Video" to inspect proctoring events'
+          : 'Upload an MP4/WebM video or click "Sample Traffic Video" to begin AI analysis';
+        cx.fillStyle = isExam ? '#818CF8' : '#38BDF8';
+        cx.font = 'bold 18px sans-serif';
+        cx.textAlign = 'center';
+        cx.fillText(titleText, W / 2, H / 2 - 14);
+        cx.fillStyle = '#94A3B8'; cx.font = '13px sans-serif';
+        cx.fillText(subtitleText, W / 2, H / 2 + 16);
+        cx.fillStyle = '#64748B'; cx.font = '11px sans-serif';
+        cx.fillText('Supports YOLOX Vehicle/Person Detection · ByteTrack · Calibrated Metrics', W / 2, H / 2 + 40);
       }
 
     } else {
@@ -1937,6 +1994,7 @@ export const WorkbenchView: React.FC = () => {
     setActiveModule(targetModule);
     activeModuleRef.current = targetModule;
     setDomain(targetModule);
+    setSceneRec(null);
 
     // Purge all frame buffers and detections immediately to prevent cross-contamination
     rtFrameBufferRef.current.clear();
@@ -1952,25 +2010,24 @@ export const WorkbenchView: React.FC = () => {
       setRealCalib(null);
     } else {
       setExamTracks([]);
+      setExamObjectTracks([]);
       setExamEvents([]);
       setExamZones([]);
       setPrimaryExamFinding(null);
     }
 
-    const currentVideoId = activeVideoId || telemetry?.video_id;
     try {
-      const res = await fetch(apiUrl('/api/v1/jobs?status=SUCCEEDED'));
+      const res = await fetch(apiUrl('/api/v1/jobs?status=SUCCEEDED&limit=50'));
       if (res.ok) {
         const jobs = await res.json();
         let matching = null;
-        if (currentVideoId) {
-          matching = jobs.find((j: any) => {
-            const jDomain = (j.domain || (j.config_json || {}).domain || (j.config_json || {}).module || '').toLowerCase();
-            return j.video_id === currentVideoId && (targetModule === 'examination' ? jDomain.includes('exam') : !jDomain.includes('exam'));
-          });
-        }
+        // Prefer rich job with tracks
+        matching = jobs.find((j: any) => {
+          const jDomain = (j.domain || (j.config_json || {}).domain || (j.config_json || {}).module || '').toLowerCase();
+          const isMatch = targetModule === 'examination' ? jDomain.includes('exam') : !jDomain.includes('exam');
+          return isMatch && (j.telemetry?.total_tracks > 0 || j.telemetry?.person_tracks_count > 0);
+        });
         if (!matching) {
-          // If no matching job for this specific video, find latest succeeded job in target domain
           matching = jobs.find((j: any) => {
             const jDomain = (j.domain || (j.config_json || {}).domain || (j.config_json || {}).module || '').toLowerCase();
             return targetModule === 'examination' ? jDomain.includes('exam') : !jDomain.includes('exam');
@@ -1978,30 +2035,74 @@ export const WorkbenchView: React.FC = () => {
         }
 
         if (matching) {
+          setDomain(targetModule, matching.id);
           setActiveJobId(matching.id);
           activeJobIdRef.current = matching.id;
+          prevSharedJobIdRef.current = matching.id;
           if (matching.video_id) {
             setActiveVideoId(matching.video_id);
             const streamUrl = apiUrl(`/api/v1/videos/${matching.video_id}/stream`);
             setVideoSrc(streamUrl);
-            if (videoRef.current) {
-              videoRef.current.src = streamUrl;
-              videoRef.current.load();
-              videoRef.current.play().catch(() => {});
-            }
+            setIsRealVideo(true);
+            isRealVideoRef.current = true;
+            setPlaybackError(null);
+            fetch(apiUrl(`/api/v1/videos/${matching.video_id}`))
+              .then(r => r.json())
+              .then(v => { if (v?.filename) setSrcName(v.filename); })
+              .catch(() => {});
           }
           selectSharedJob(matching.id);
           loadJobResults(matching.id);
         } else {
+          setDomain(targetModule);
           setActiveJobId(null);
           activeJobIdRef.current = null;
+          prevSharedJobIdRef.current = null;
+          setVideoSrc(null);
+          setPipelineStage('IDLE');
           setJobStatusText(`Switched to ${targetModule.toUpperCase()} domain. Select or upload a video to analyze.`);
         }
       }
     } catch (err) {
       console.warn('Job lookup error on domain switch:', err);
     }
-  }, [activeVideoId, telemetry, loadJobResults, selectSharedJob, setDomain]);
+  }, [loadJobResults, selectSharedJob, setDomain]);
+
+  const handleLoadSampleTrafficVideo = useCallback(async () => {
+    try {
+      setActiveModule('traffic');
+      activeModuleRef.current = 'traffic';
+      setDomain('traffic');
+      setSceneRec(null);
+      setExamTracks([]);
+      setExamEvents([]);
+      setExamZones([]);
+      setPrimaryExamFinding(null);
+      setJobStatusText('Loading Sample Traffic Video (Highway)...');
+      setIsRealVideo(true);
+      isRealVideoRef.current = true;
+      const res = await fetch(apiUrl('/api/v1/jobs?domain=traffic&status=SUCCEEDED&limit=30'));
+      if (res.ok) {
+        const jobs = await res.json();
+        const richJob = jobs.find((j: any) => j.telemetry?.total_tracks > 0) || jobs[0];
+        if (richJob) {
+          prevSharedJobIdRef.current = richJob.id;
+          setActiveJobId(richJob.id);
+          activeJobIdRef.current = richJob.id;
+          selectSharedJob(richJob.id);
+          loadJobResults(richJob.id);
+          return;
+        }
+      }
+      prevSharedJobIdRef.current = 1031;
+      setActiveJobId(1031);
+      activeJobIdRef.current = 1031;
+      selectSharedJob(1031);
+      loadJobResults(1031);
+    } catch (e) {
+      console.error('Failed to load sample traffic video:', e);
+    }
+  }, [loadJobResults, selectSharedJob, setDomain]);
 
   const handleReviewEvent = async (eventId: string, status: 'ACCEPTED' | 'REJECTED', notes: string) => {
     try {
@@ -2112,12 +2213,9 @@ export const WorkbenchView: React.FC = () => {
 
     const blobUrl = URL.createObjectURL(file);
     setVideoSrc(blobUrl);
-    if (videoRef.current) {
-      videoRef.current.src = blobUrl;
-      videoRef.current.muted = true;
-      videoRef.current.loop = false;
-      videoRef.current.play().catch(() => {});
-    }
+    setIsRealVideo(true);
+    isRealVideoRef.current = true;
+    setPlaybackError(null);
     setPipelineStage('VIDEO_READY');
     setJobStatusText('Video loaded — Uploading for AI analysis...');
 
@@ -2153,8 +2251,8 @@ export const WorkbenchView: React.FC = () => {
 
       // Quick keyword heuristics on filename
       const lowerName = file.name.toLowerCase();
-      const isExamByName = lowerName.includes('exam') || lowerName.includes('cheat') || lowerName.includes('student') || lowerName.includes('classroom') || lowerName.includes('hall') || lowerName.includes('test');
-      const isTrafficByName = lowerName.includes('traffic') || lowerName.includes('highway') || lowerName.includes('car') || lowerName.includes('road') || lowerName.includes('speed') || lowerName.includes('synthetic');
+      const isExamByName = lowerName.includes('exam') || lowerName.includes('cheat') || lowerName.includes('student') || lowerName.includes('classroom') || lowerName.includes('hall') || lowerName.includes('test') || lowerName.includes('proctor');
+      const isTrafficByName = lowerName.includes('traffic') || lowerName.includes('highway') || lowerName.includes('car') || lowerName.includes('road') || lowerName.includes('speed') || lowerName.includes('vehicle') || lowerName.includes('synthetic');
 
       // Call Scene Router
       let rec: any = null;
@@ -2173,47 +2271,35 @@ export const WorkbenchView: React.FC = () => {
       }
       setIsClassifying(false);
 
-      // STRICT DOMAIN ISOLATION & PIPELINE ROUTING RESOLUTION
-      const targetDomain = activeDomain || activeModuleRef.current;
-      // Priority 1: User explicitly pre-selected 'examination' prior to upload
-      if (targetDomain === 'examination') {
-        setJobStatusText(`Examination Intelligence active — Initializing Examination Pipeline...`);
-        startJobForModule(vidData.id, 'examination', true);
-        return;
+      // Intelligent Domain Routing:
+      // 1. If Scene Router or filename detects traffic environment -> route to traffic
+      // 2. If Scene Router or filename detects classroom examination -> route to examination
+      // 3. Otherwise respect the current selected domain
+      let chosenModule: AnalysisModule = 'traffic';
+      const sceneRecommendsTraffic = rec?.recommended_module === 'traffic' || (rec?.scene_type === 'TRAFFIC' && (rec?.confidence || 0) >= 0.40);
+      const sceneRecommendsExam = rec?.recommended_module === 'examination' || (rec?.scene_type === 'CLASSROOM_EXAMINATION' && (rec?.confidence || 0) >= 0.40);
+
+      if (sceneRecommendsTraffic && !sceneRecommendsExam) {
+        chosenModule = 'traffic';
+      } else if (sceneRecommendsExam && !sceneRecommendsTraffic) {
+        chosenModule = 'examination';
+      } else if (isTrafficByName && !isExamByName) {
+        chosenModule = 'traffic';
+      } else if (isExamByName && !isTrafficByName) {
+        chosenModule = 'examination';
+      } else if (activeModuleRef.current === 'examination' || activeDomain === 'examination') {
+        chosenModule = 'examination';
+      } else {
+        chosenModule = 'traffic';
       }
 
-      // Priority 2: Filename unambiguously indicates examination
-      if (isExamByName) {
-        setJobStatusText(`Examination video detected (${file.name}) — Initializing Examination Pipeline...`);
-        startJobForModule(vidData.id, 'examination', true);
-        return;
-      }
+      setActiveModule(chosenModule);
+      activeModuleRef.current = chosenModule;
+      setDomain(chosenModule);
 
-      // Priority 3: Scene router classifies as CLASSROOM_EXAMINATION
-      if (rec?.scene_type === 'CLASSROOM_EXAMINATION') {
-        setJobStatusText(`Classroom scene detected (${Math.round((rec.confidence || 0) * 100)}%) — Running Examination Pipeline...`);
-        startJobForModule(vidData.id, 'examination', true);
-        return;
-      }
-
-      // Priority 4: Filename unambiguously indicates traffic
-      if (isTrafficByName) {
-        setJobStatusText(`Traffic video detected (${file.name}) — Initializing Traffic Pipeline...`);
-        startJobForModule(vidData.id, 'traffic', true);
-        return;
-      }
-
-      // Priority 5: Confident traffic scene classification
-      if (rec?.scene_type === 'TRAFFIC' && (rec?.confidence || 0) >= 0.50) {
-        setJobStatusText(`Traffic scene detected (${Math.round(rec.confidence * 100)}%) — Auto-running Traffic Pipeline...`);
-        startJobForModule(vidData.id, 'traffic', true);
-        return;
-      }
-
-      // Priority 6: Fallback for ambiguous scene -> route to current targetDomain
-      const fallbackDomain = targetDomain || 'traffic';
-      setJobStatusText(`Scene routing (${Math.round((rec?.confidence || 0) * 100)}%) — Running ${fallbackDomain.toUpperCase()} Pipeline...`);
-      startJobForModule(vidData.id, fallbackDomain, true);
+      setJobStatusText(`${chosenModule === 'examination' ? '🎓 Examination Intelligence' : '🚗 Traffic Intelligence'} active — Processing ${file.name}...`);
+      startJobForModule(vidData.id, chosenModule, true);
+      return;
 
     } catch (err: any) {
       console.error('Upload/job error:', err);
@@ -3017,9 +3103,14 @@ export const WorkbenchView: React.FC = () => {
           <video
             ref={videoRef}
             src={videoSrc || undefined}
+            autoPlay
             playsInline
             muted
+            loop
             preload="auto"
+            onCanPlay={() => {
+              videoRef.current?.play().catch(() => {});
+            }}
             onPlay={() => setPlaying(true)}
             onPause={() => { if (!isLiveStreamingRef.current) setPlaying(false); }}
             onError={() => {
@@ -3216,7 +3307,17 @@ export const WorkbenchView: React.FC = () => {
             onClick={handleCanvasClick}
             onMouseMove={handleCanvasMouseMove}
             onMouseLeave={handleCanvasMouseLeave}
-            style={{ cursor: 'pointer', display: 'block', borderRadius: 6 }}
+            style={{
+              cursor: 'pointer',
+              display: 'block',
+              borderRadius: 6,
+              width: '100%',
+              height: 'auto',
+              aspectRatio: '16/9',
+              maxHeight: '74vh',
+              objectFit: 'contain',
+              background: '#0F172A'
+            }}
           />
 
           {/* Pipeline Progress Status */}
@@ -3353,7 +3454,66 @@ export const WorkbenchView: React.FC = () => {
                 🎓 Examination
               </button>
             </div>
-            <label style={{ display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer' }}>Upload MP4/WebM{' '}<input type="file" accept="video/mp4,video/webm" onChange={handleFileUpload} /></label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer', background: '#F8FAFC', padding: '3px 8px', borderRadius: '4px', border: '1px solid #CBD5E1', fontSize: '11px', fontWeight: 600 }}>
+              📁 Upload Video <input type="file" accept="video/mp4,video/webm" onChange={handleFileUpload} style={{ display: 'none' }} />
+            </label>
+            {activeModule === 'traffic' && (
+              <>
+                <button
+                  className="b g"
+                  type="button"
+                  onClick={handleLoadSampleTrafficVideo}
+                  style={{ padding: '3px 10px', fontSize: '11px', fontWeight: 600, borderRadius: '4px', cursor: 'pointer' }}
+                  title="Load real highway traffic video with vehicle tracks and speeding violations"
+                >
+                  🎬 Sample Traffic Video
+                </button>
+                <button
+                  className="b g"
+                  type="button"
+                  onClick={() => {
+                    setIsRealVideo(false);
+                    isRealVideoRef.current = false;
+                    setVideoSrc(null);
+                    setActiveJobId(null);
+                    setPipelineStage('COMPLETED');
+                    setJobStatusText('Interactive Demo Mode Active — Synthetic Traffic & Monocular Road Calibration');
+                  }}
+                  style={{
+                    padding: '3px 10px',
+                    fontSize: '11px',
+                    fontWeight: 600,
+                    borderRadius: '4px',
+                    cursor: 'pointer',
+                    background: !isRealVideo ? '#FEF3C7' : undefined,
+                    color: !isRealVideo ? '#92400E' : undefined
+                  }}
+                  title="Switch to Synthetic Traffic Simulation"
+                >
+                  ⚡ Interactive Demo
+                </button>
+              </>
+            )}
+            {activeModule === 'examination' && (
+              <button
+                className="b g"
+                type="button"
+                onClick={() => {
+                  setActiveModule('examination');
+                  activeModuleRef.current = 'examination';
+                  setDomain('examination');
+                  setActiveJobId(990);
+                  activeJobIdRef.current = 990;
+                  prevSharedJobIdRef.current = 990;
+                  selectSharedJob(990);
+                  loadJobResults(990);
+                }}
+                style={{ padding: '3px 10px', fontSize: '11px', fontWeight: 600, borderRadius: '4px', cursor: 'pointer' }}
+                title="Load Examination Job #990 with person tracks and proctorship events"
+              >
+                🎓 Sample Exam Video (Job #990)
+              </button>
+            )}
           </div>
 
           <div style={{ display: 'flex', gap: '16px', fontSize: '11px', color: '#64748B', marginTop: '8px', paddingTop: '6px', borderTop: '1px solid #E2E8F0', flexWrap: 'wrap' }}>
