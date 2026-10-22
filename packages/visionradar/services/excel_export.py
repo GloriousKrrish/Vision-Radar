@@ -245,6 +245,9 @@ class ExcelExportEngine:
             events = db.query(ExaminationEventRecord).filter(ExaminationEventRecord.job_id == job.id).all()
             total_persons = len(person_tracks)
             total_objects = len(object_tracks)
+            fps = (video.fps or 30.0) if video else 30.0
+            sustained_persons = sum(1 for t in person_tracks if (t.last_frame - t.first_frame + 1) / fps >= 1.0)
+            transient_persons = sum(1 for t in person_tracks if (t.last_frame - t.first_frame + 1) / fps < 1.0)
             students = sum(1 for t in person_tracks if t.assigned_role == "STUDENT")
             staff = sum(1 for t in person_tracks if t.assigned_role in ["INVIGILATOR", "EXAM_COORDINATOR", "AUTHORIZED_STAFF"])
             unknown_roles = sum(1 for t in person_tracks if not t.assigned_role or t.assigned_role == "UNKNOWN")
@@ -259,6 +262,8 @@ class ExcelExportEngine:
 
             kpis = [
                 ("Total Monitored Persons", total_persons, "individual human tracks"),
+                ("  ↳ Sustained Examinees (Seated/Continuous)", sustained_persons, "monitored presence >= 1.0s"),
+                ("  ↳ Transient / Peripheral Boundary Detections", transient_persons, "fleeting edge detection < 1.0s"),
                 ("Associated Physical Materials", total_objects, "evidence object tracks"),
                 ("Confirmed Students Enrolled", students, "roster-verified students"),
                 ("Authorized Staff (Invigilators/Coordinators)", staff, "roster-verified staff"),

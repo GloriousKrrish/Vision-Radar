@@ -91,6 +91,9 @@ class ForensicAuditExporter:
 
         # Role breakdown & track continuity analysis
         person_tracks = [t for t in tracks if t.entity_type == "person"]
+        object_tracks = [t for t in tracks if t.entity_type != "person"]
+        fps = (video.fps or 30.0) if video else 30.0
+
         role_breakdown = {
             "STUDENT": 0,
             "INVIGILATOR": 0,
@@ -99,11 +102,21 @@ class ForensicAuditExporter:
             "UNKNOWN": 0
         }
         track_summaries = []
+        sustained_count = 0
+        transient_count = 0
+
         for t in person_tracks:
             r = getattr(t, "assigned_role", "UNKNOWN") or "UNKNOWN"
             role_breakdown[r] = role_breakdown.get(r, 0) + 1
             history = t.trajectory_json or []
             dur_frames = max(1, (t.last_frame - t.first_frame + 1))
+            dur_sec = round(dur_frames / fps, 2)
+            is_transient = dur_sec < 1.0
+            if is_transient:
+                transient_count += 1
+            else:
+                sustained_count += 1
+
             coverage_pct = round(min(100.0, (len(history) / dur_frames) * 100.0), 1)
             track_summaries.append({
                 "track_id": t.track_id,
@@ -112,9 +125,28 @@ class ForensicAuditExporter:
                 "first_frame": t.first_frame,
                 "last_frame": t.last_frame,
                 "duration_frames": dur_frames,
+                "duration_sec": dur_sec,
+                "is_transient": is_transient,
                 "history_points": len(history),
                 "continuity_coverage_pct": coverage_pct,
                 "assigned_zone": t.assigned_zone
+            })
+
+        # Object summaries
+        object_summaries = []
+        for ot in object_tracks:
+            dur_frames = max(1, (ot.last_frame - ot.first_frame + 1))
+            dur_sec = round(dur_frames / fps, 2)
+            hist = ot.trajectory_json or []
+            cov_pct = round(min(100.0, (len(hist) / dur_frames) * 100.0), 1)
+            object_summaries.append({
+                "track_id": ot.track_id,
+                "object_class": ot.entity_type.replace("object_", ""),
+                "associated_zone": ot.assigned_zone,
+                "first_frame": ot.first_frame,
+                "last_frame": ot.last_frame,
+                "duration_sec": dur_sec,
+                "continuity_coverage_pct": cov_pct
             })
 
         # Group candidate events by track ID
@@ -139,12 +171,13 @@ class ForensicAuditExporter:
             ),
             "tracking_continuity_limitations": (
                 "Temporary visual occlusions up to 2 frames are smoothly interpolated. Distant students (< 0.05 normalized height) "
-                "or individuals walking outside camera bounds may experience track fragmentation upon re-entry."
+                "or individuals walking outside camera bounds may experience track fragmentation upon re-entry. "
+                "Peripheral tracks with duration < 1.0s are classified as transient observations."
             )
         }
 
         report_payload = {
-            "report_version": "2.1.0",
+            "report_version": "2.2.0",
             "report_id": f"VR-EXAM-AUDIT-{job_id}-{int(datetime.datetime.now().timestamp())}",
             "generated_at": utcnow_str(),
             "job_id": job_id,
@@ -168,6 +201,9 @@ class ForensicAuditExporter:
             },
             "summary_metrics": {
                 "total_person_tracks": len(person_tracks),
+                "sustained_examinees": sustained_count,
+                "transient_peripheral_tracks": transient_count,
+                "total_object_tracks": len(object_tracks),
                 "total_candidate_events": len(events),
                 "role_breakdown": role_breakdown,
                 "priority_breakdown": priority_counts,
@@ -176,6 +212,7 @@ class ForensicAuditExporter:
                 "configured_zones_count": len(zones)
             },
             "track_continuity_analysis": track_summaries,
+            "associated_object_tracks": object_summaries,
             "events_grouped_by_track": events_by_track,
             "events_timeline": events_payload,
             "configured_zones": [
@@ -388,11 +425,11 @@ class ForensicAuditExporter:
     <div class="grid-kpi">
         <div class="card-kpi">
             <div class="val">{metrics.get('total_person_tracks', 0)}</div>
-            <div class="lbl">Persons Tracked</div>
+            <div class="lbl">Persons Tracked ({metrics.get('sustained_examinees', 0)} Seated · {metrics.get('transient_peripheral_tracks', 0)} Peripheral)</div>
         </div>
         <div class="card-kpi">
             <div class="val" style="color: #2563eb;">{roles.get('STUDENT', 0)}</div>
-            <div class="lbl">Students</div>
+            <div class="lbl">Roster Students</div>
         </div>
         <div class="card-kpi">
             <div class="val" style="color: #0891b2;">{roles.get('INVIGILATOR', 0) + roles.get('AUTHORIZED_STAFF', 0) + roles.get('EXAM_COORDINATOR', 0)}</div>
@@ -410,8 +447,8 @@ class ForensicAuditExporter:
             <div class="lbl">Candidate Events</div>
         </div>
         <div class="card-kpi">
-            <div class="val" style="color: #dc2626;">{metrics.get('priority_breakdown', {}).get('RED', 0)}</div>
-            <div class="lbl">High Priority (RED)</div>
+            <div class="val" style="color: #4f46e5;">{metrics.get('total_object_tracks', 0)}</div>
+            <div class="lbl">Evidence Objects Tracked</div>
         </div>
         <div class="card-kpi">
             <div class="val" style="color: #16a34a;">{metrics.get('proctor_review_summary', {}).get('ACCEPTED', 0)}</div>
@@ -432,11 +469,13 @@ class ForensicAuditExporter:
     <div class="section-title">Session &amp; Video Provenance</div>
     <table class="meta-table" style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; width: 100%; margin-bottom: 20px;">
         <tr><td class="label">Job ID:</td><td>#{report.get('job_id')}</td></tr>
+        <tr><td class="label">Report Identifier:</td><td>{report.get('report_id')}</td></tr>
         <tr><td class="label">Video Filename:</td><td>{vm.get('filename')}</td></tr>
         <tr><td class="label">Video SHA-256 Hash:</td><td style="font-family: monospace; font-size: 11px;">{vm.get('sha256_hash')}</td></tr>
         <tr><td class="label">Video Duration / FPS:</td><td>{vm.get('duration_sec')}s @ {vm.get('fps')} FPS ({vm.get('width')}x{vm.get('height')})</td></tr>
         <tr><td class="label">Processing Profile:</td><td><b>{prov.get('processing_mode', 'balanced').upper()}</b> (Stride: {prov.get('stride', 2)}, Throughput: {prov.get('average_throughput_fps', 18.5)} FPS)</td></tr>
         <tr><td class="label">Auditing Standard:</td><td>Strict Evidence-First Tripartite Protocol (Local Detector + Gemini AI + Human Proctor)</td></tr>
+        <tr><td class="label">Cryptographic Algorithm:</td><td>{report.get('seal_algorithm', 'SHA-256 / Canonical JSON')}</td></tr>
     </table>
 
     <div class="section-title">Observable Event Timeline &amp; Verification</div>
@@ -454,6 +493,17 @@ class ForensicAuditExporter:
         <tbody>
             {event_rows if event_rows else '<tr><td colspan="6" style="padding: 20px; text-align: center; color: #64748b;">No candidate anomalies flagged during this examination session.</td></tr>'}
         </tbody>
+    </table>
+
+    <div class="section-title">Forensic Data Dictionary &amp; Accounting Rules</div>
+    <table class="meta-table" style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; width: 100%; margin-top: 15px; margin-bottom: 20px; font-size: 12px;">
+        <tr><td class="label">Persons Tracked:</td><td>Count of distinct human candidate tracks (entity_type = 'person'). Does not include physical books, phones, or desk objects.</td></tr>
+        <tr><td class="label">Sustained Examinees:</td><td>Examinees with continuous tracking duration &ge; 1.0s, establishing stable visual presence.</td></tr>
+        <tr><td class="label">Transient Peripheral Tracks:</td><td>Fleeting visual detections (&lt; 1.0s) appearing at extreme frame boundaries or session edges.</td></tr>
+        <tr><td class="label">Evidence Objects Tracked:</td><td>Physical materials (books, papers, cell phones, calculators) spatially and temporally linked to examinees.</td></tr>
+        <tr><td class="label">Candidate Events:</td><td>Algorithmically flagged observation windows. These represent raw observable behaviors, never automatic determinations of academic dishonesty.</td></tr>
+        <tr><td class="label">Review Reconciliation:</td><td>Sum of review states (ACCEPTED + REJECTED + PENDING + INCONCLUSIVE) reconciles to exactly 100% of candidate event records.</td></tr>
+        <tr><td class="label">Cryptographic Seal:</td><td>Tamper-evident SHA-256 digest computed across canonical JSON metadata. Re-computing the digest confirms report immutability.</td></tr>
     </table>
 
     <div style="margin-top: 40px; border-top: 1px solid #cbd5e1; padding-top: 15px; font-size: 11px; color: #64748b; display: flex; justify-content: space-between;">

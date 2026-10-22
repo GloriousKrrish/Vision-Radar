@@ -13,3 +13,4 @@ requests
 python-multipart
 onnx
 onnxruntime
+openpyxl

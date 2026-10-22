@@ -751,6 +751,9 @@ interface ExamOverviewProps {
   studentCount?: number;
   staffCount?: number;
   unknownCount?: number;
+  objectCount?: number;
+  sustainedPersons?: number;
+  transientPersons?: number;
   jobId?: number;
 }
 
@@ -764,6 +767,9 @@ export const ExaminationOverviewCard: React.FC<ExamOverviewProps> = ({
   studentCount = 0,
   staffCount = 0,
   unknownCount = 0,
+  objectCount = 0,
+  sustainedPersons,
+  transientPersons,
   jobId
 }) => {
   const { openExportModal } = useSharedJob();
@@ -810,7 +816,12 @@ export const ExaminationOverviewCard: React.FC<ExamOverviewProps> = ({
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px', margin: '12px 0' }}>
         {[
-          { label: 'MONITORED PERSONS', value: totalPersons, unit: 'students/staff', color: '#1E293B' },
+          {
+            label: 'MONITORED PERSONS',
+            value: totalPersons,
+            unit: sustainedPersons !== undefined ? `(${sustainedPersons} seated · ${transientPersons ?? 0} edge)` : 'examinees',
+            color: '#1E293B'
+          },
           { label: 'CANDIDATE EVENTS', value: totalEvents, unit: 'observable events', color: '#4F46E5' },
           { label: 'PENDING REVIEW', value: pendingReviews, unit: 'unreviewed', color: '#D97706' },
           { label: 'VERIFIED EVIDENCE', value: acceptedReviews, unit: 'accepted', color: '#059669' },
@@ -835,6 +846,11 @@ export const ExaminationOverviewCard: React.FC<ExamOverviewProps> = ({
         <span style={{ background: '#F1F5F9', color: '#475569', padding: '2px 8px', borderRadius: '12px', fontSize: '11px', fontWeight: 700 }}>
           ❓ {unknownCount} Unknown
         </span>
+        {objectCount > 0 && (
+          <span style={{ background: '#F5F3FF', color: '#6D28D9', padding: '2px 8px', borderRadius: '12px', fontSize: '11px', fontWeight: 700 }}>
+            📦 {objectCount} Associated Objects
+          </span>
+        )}
       </div>
 
       <div style={{
@@ -1217,6 +1233,7 @@ interface ExamSidebarProps {
   personTracks: ExaminationPersonTrack[];
   zones: ExaminationZone[];
   onReview: (eventId: string, status: 'ACCEPTED' | 'REJECTED', notes: string) => void;
+  onUpdateRole?: (personTrackId: number, newRole: string) => void;
   onSeekTime?: (timeSec: number) => void;
 }
 
@@ -1226,6 +1243,7 @@ export const ExaminationSidebarInspector: React.FC<ExamSidebarProps> = ({
   personTracks,
   zones,
   onReview,
+  onUpdateRole,
   onSeekTime
 }) => {
   const [tab, setTab] = useState<'events' | 'person'>('events');
@@ -1410,15 +1428,86 @@ export const ExaminationSidebarInspector: React.FC<ExamSidebarProps> = ({
           {selectedPerson ? (
             <div style={{ fontSize: '12px', color: '#CBD5E1' }}>
               <div style={{ padding: '10px', background: '#1E293B', borderRadius: '6px', marginBottom: '8px' }}>
-                <div style={{ fontSize: '13px', fontWeight: 800, color: '#818CF8' }}>
-                  Person Track #{selectedPerson.track_id}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div style={{ fontSize: '13px', fontWeight: 800, color: '#818CF8' }}>
+                    Person Track #{selectedPerson.track_id}
+                  </div>
+                  <span style={{
+                    fontSize: '9px',
+                    fontWeight: 700,
+                    padding: '2px 6px',
+                    borderRadius: '4px',
+                    background: selectedPerson.assigned_role === 'STUDENT' ? '#1E3A8A' : ['INVIGILATOR', 'EXAM_COORDINATOR', 'AUTHORIZED_STAFF'].includes(selectedPerson.assigned_role || '') ? '#064E3B' : '#334155',
+                    color: selectedPerson.assigned_role === 'STUDENT' ? '#93C5FD' : ['INVIGILATOR', 'EXAM_COORDINATOR', 'AUTHORIZED_STAFF'].includes(selectedPerson.assigned_role || '') ? '#6EE7B7' : '#94A3B8'
+                  }}>
+                    {selectedPerson.assigned_role || 'UNKNOWN'} ({selectedPerson.role_source || 'DEFAULT'})
+                  </span>
                 </div>
-                <div style={{ marginTop: '4px', fontSize: '11px' }}>
+                <div style={{ marginTop: '6px', fontSize: '11px' }}>
                   Assigned Seating Zone: <b style={{ color: '#10B981' }}>{selectedPerson.assigned_zone || 'Unassigned / Freely Moving'}</b>
                 </div>
                 <div style={{ marginTop: '2px', fontSize: '11px' }}>
                   Observation Span: Frames #{selectedPerson.first_frame}–#{selectedPerson.last_frame}
                 </div>
+
+                {onUpdateRole && (
+                  <div style={{ marginTop: '10px', paddingTop: '8px', borderTop: '1px solid #334155' }}>
+                    <div style={{ fontSize: '10px', color: '#94A3B8', fontWeight: 600, marginBottom: '4px' }}>
+                      ASSIGN / CONFIRM ROSTER ROLE:
+                    </div>
+                    <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+                      <button
+                        onClick={() => onUpdateRole(selectedPerson.track_id, 'STUDENT')}
+                        style={{
+                          background: selectedPerson.assigned_role === 'STUDENT' ? '#1D4ED8' : '#0F172A',
+                          color: '#FFF',
+                          border: '1px solid #3B82F6',
+                          borderRadius: '4px',
+                          padding: '3px 8px',
+                          fontSize: '10px',
+                          fontWeight: 600,
+                          cursor: 'pointer'
+                        }}
+                      >
+                        🎓 Student
+                      </button>
+                      <button
+                        onClick={() => onUpdateRole(selectedPerson.track_id, 'INVIGILATOR')}
+                        style={{
+                          background: ['INVIGILATOR', 'AUTHORIZED_STAFF'].includes(selectedPerson.assigned_role || '') ? '#065F46' : '#0F172A',
+                          color: '#FFF',
+                          border: '1px solid #10B981',
+                          borderRadius: '4px',
+                          padding: '3px 8px',
+                          fontSize: '10px',
+                          fontWeight: 600,
+                          cursor: 'pointer'
+                        }}
+                        title="Assigning staff role auto-suppresses false-positive candidate proximity alerts"
+                      >
+                        🛡️ Invigilator
+                      </button>
+                      <button
+                        onClick={() => onUpdateRole(selectedPerson.track_id, 'UNKNOWN')}
+                        style={{
+                          background: selectedPerson.assigned_role === 'UNKNOWN' ? '#475569' : '#0F172A',
+                          color: '#CBD5E1',
+                          border: '1px solid #64748B',
+                          borderRadius: '4px',
+                          padding: '3px 8px',
+                          fontSize: '10px',
+                          fontWeight: 600,
+                          cursor: 'pointer'
+                        }}
+                      >
+                        ❓ Unknown
+                      </button>
+                    </div>
+                    <div style={{ fontSize: '9px', color: '#64748B', marginTop: '4px' }}>
+                      Designating authorized staff automatically dismisses pending student proximity alerts.
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div style={{ fontWeight: 700, margin: '8px 0 4px 0', color: '#94A3B8', fontSize: '11px' }}>

@@ -122,6 +122,8 @@ if os.path.exists(web_dist_dir):
         return FileResponse(os.path.join(web_dist_dir, "index.html"))
 
 # --- System & Health Endpoints ---
+@app.get("/health")
+@app.get("/ping")
 @app.get("/api/v1/health")
 def health_check(db: Session = Depends(get_db)):
     succeeded_jobs = db.query(ProcessingJob).filter(ProcessingJob.status == "SUCCEEDED").count()
@@ -1712,25 +1714,64 @@ def get_examination_job_results(job_id: int, db: Session = Depends(get_db)):
             primary_finding_evt = red_evts[0]
             primary_finding_evt["primary_finding"] = True
 
+    person_tracks = [t for t in tracks if t.entity_type == "person"]
+    object_tracks = [t for t in tracks if t.entity_type != "person"]
+
+    formatted_person_tracks = [
+        {
+            "track_id": t.track_id,
+            "entity_type": "person",
+            "first_frame": t.first_frame,
+            "last_frame": t.last_frame,
+            "assigned_zone": t.assigned_zone,
+            "assigned_role": getattr(t, "assigned_role", "UNKNOWN") or "UNKNOWN",
+            "role_source": getattr(t, "role_source", "DEFAULT") or "DEFAULT",
+            "trajectory": t.trajectory_json
+        }
+        for t in person_tracks
+    ]
+
+    formatted_object_tracks = [
+        {
+            "track_id": t.track_id,
+            "entity_type": t.entity_type,
+            "first_frame": t.first_frame,
+            "last_frame": t.last_frame,
+            "assigned_zone": t.assigned_zone,
+            "trajectory": t.trajectory_json
+        }
+        for t in object_tracks
+    ]
+
+    video = db.query(Video).filter(Video.id == job.video_id).first()
+    fps = (video.fps or 30.0) if video else 30.0
+    sustained_persons = sum(1 for t in person_tracks if (t.last_frame - t.first_frame + 1) / fps >= 1.0)
+    transient_persons = sum(1 for t in person_tracks if (t.last_frame - t.first_frame + 1) / fps < 1.0)
+
+    summary = {
+        "total_person_tracks": len(person_tracks),
+        "sustained_examinees": sustained_persons,
+        "transient_tracks": transient_persons,
+        "students": sum(1 for t in person_tracks if getattr(t, "assigned_role", "UNKNOWN") == "STUDENT"),
+        "staff": sum(1 for t in person_tracks if getattr(t, "assigned_role", "UNKNOWN") in ["INVIGILATOR", "EXAM_COORDINATOR", "AUTHORIZED_STAFF"]),
+        "unknown_roles": sum(1 for t in person_tracks if not getattr(t, "assigned_role", None) or getattr(t, "assigned_role", "") == "UNKNOWN"),
+        "total_object_tracks": len(object_tracks),
+        "total_candidate_events": len(events),
+        "pending_reviews": sum(1 for e in events if e.review_status == "PENDING"),
+        "accepted_reviews": sum(1 for e in events if e.review_status == "ACCEPTED"),
+        "rejected_reviews": sum(1 for e in events if e.review_status == "REJECTED")
+    }
+
     return {
         "job_id": job.id,
         "video_id": job.video_id,
         "status": job.status,
         "telemetry": job.telemetry_json or {},
         "primary_finding": primary_finding_evt,
-        "tracks": [
-            {
-                "track_id": t.track_id,
-                "entity_type": t.entity_type,
-                "first_frame": t.first_frame,
-                "last_frame": t.last_frame,
-                "assigned_zone": t.assigned_zone,
-                "assigned_role": getattr(t, "assigned_role", "UNKNOWN") or "UNKNOWN",
-                "role_source": getattr(t, "role_source", "DEFAULT") or "DEFAULT",
-                "trajectory": t.trajectory_json
-            }
-            for t in tracks
-        ],
+        "summary": summary,
+        "tracks": formatted_person_tracks,
+        "person_tracks": formatted_person_tracks,
+        "object_tracks": formatted_object_tracks,
         "events": formatted_events,
         "zones": [
             {
@@ -1741,6 +1782,111 @@ def get_examination_job_results(job_id: int, db: Session = Depends(get_db)):
             }
             for z in zones
         ]
+    }
+
+
+@app.get("/api/v1/jobs/{job_id}/examination/tracks")
+def get_examination_tracks(job_id: int, db: Session = Depends(get_db)):
+    """
+    Returns structured person tracks, evidence object tracks, continuity metrics,
+    and role assignment provenance for an examination job.
+    """
+    job = db.query(ProcessingJob).filter(ProcessingJob.id == job_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.domain != "examination":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Job #{job_id} belongs to '{job.domain}' domain. Examination tracks are only available for examination jobs."
+        )
+
+    video = db.query(Video).filter(Video.id == job.video_id).first()
+    fps = (video.fps or 30.0) if video else 30.0
+
+    all_tracks = db.query(ExaminationTrackRecord).filter(ExaminationTrackRecord.job_id == job_id).all()
+    person_tracks = [t for t in all_tracks if t.entity_type == "person"]
+    object_tracks = [t for t in all_tracks if t.entity_type != "person"]
+
+    events = db.query(ExaminationEventRecord).filter(ExaminationEventRecord.job_id == job_id).all()
+    events_by_person: Dict[int, List[Any]] = {}
+    for e in events:
+        if e.person_track_id is not None:
+            events_by_person.setdefault(e.person_track_id, []).append(e)
+
+    formatted_persons = []
+    for t in person_tracks:
+        dur_frames = max(1, t.last_frame - t.first_frame + 1)
+        dur_sec = round(dur_frames / fps, 2)
+        traj = t.trajectory_json or []
+        continuity_pct = round(min(100.0, (len(traj) / dur_frames) * 100.0), 1)
+        is_transient = dur_sec < 1.0
+        p_events = events_by_person.get(t.track_id, [])
+
+        formatted_persons.append({
+            "track_id": t.track_id,
+            "entity_type": "person",
+            "assigned_role": getattr(t, "assigned_role", "UNKNOWN") or "UNKNOWN",
+            "role_source": getattr(t, "role_source", "DEFAULT") or "DEFAULT",
+            "first_frame": t.first_frame,
+            "last_frame": t.last_frame,
+            "duration_frames": dur_frames,
+            "duration_sec": dur_sec,
+            "continuity_pct": continuity_pct,
+            "is_transient": is_transient,
+            "assigned_zone": t.assigned_zone,
+            "candidate_events_count": len(p_events),
+            "accepted_events_count": sum(1 for e in p_events if e.review_status == "ACCEPTED"),
+            "pending_events_count": sum(1 for e in p_events if e.review_status == "PENDING"),
+            "rejected_events_count": sum(1 for e in p_events if e.review_status == "REJECTED"),
+            "trajectory": traj
+        })
+
+    formatted_objects = []
+    for ot in object_tracks:
+        dur_frames = max(1, ot.last_frame - ot.first_frame + 1)
+        dur_sec = round(dur_frames / fps, 2)
+        traj = ot.trajectory_json or []
+        p_id = None
+        if ot.assigned_zone and ot.assigned_zone.startswith("person_"):
+            try:
+                p_id = int(ot.assigned_zone.split("_")[1])
+            except Exception:
+                pass
+
+        formatted_objects.append({
+            "track_id": ot.track_id,
+            "entity_type": ot.entity_type,
+            "object_class": ot.entity_type.replace("object_", ""),
+            "associated_person_track_id": p_id,
+            "first_frame": ot.first_frame,
+            "last_frame": ot.last_frame,
+            "duration_frames": dur_frames,
+            "duration_sec": dur_sec,
+            "assigned_zone": ot.assigned_zone,
+            "trajectory": traj
+        })
+
+    students_count = sum(1 for t in person_tracks if getattr(t, "assigned_role", "UNKNOWN") == "STUDENT")
+    staff_count = sum(1 for t in person_tracks if getattr(t, "assigned_role", "UNKNOWN") in ["INVIGILATOR", "EXAM_COORDINATOR", "AUTHORIZED_STAFF"])
+    unknown_count = sum(1 for t in person_tracks if not getattr(t, "assigned_role", None) or getattr(t, "assigned_role", "") == "UNKNOWN")
+    sustained_examinees = sum(1 for t in formatted_persons if not t["is_transient"])
+    transient_tracks = sum(1 for t in formatted_persons if t["is_transient"])
+
+    return {
+        "job_id": job_id,
+        "video_id": job.video_id,
+        "summary": {
+            "total_person_tracks": len(person_tracks),
+            "sustained_examinees": sustained_examinees,
+            "transient_peripheral_tracks": transient_tracks,
+            "students": students_count,
+            "staff": staff_count,
+            "unknown_roles": unknown_count,
+            "total_object_tracks": len(object_tracks),
+            "total_candidate_events": len(events)
+        },
+        "person_tracks": formatted_persons,
+        "object_tracks": formatted_objects
     }
 
 

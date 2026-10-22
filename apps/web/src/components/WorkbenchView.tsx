@@ -140,6 +140,7 @@ export const WorkbenchView: React.FC = () => {
   const [sceneRec, setSceneRec] = useState<(SceneClassificationResult & { video_id: number; video_name: string }) | null>(null);
   const [isClassifying, setIsClassifying] = useState<boolean>(false);
   const [examTracks, setExamTracks] = useState<ExaminationPersonTrack[]>([]);
+  const [examObjectTracks, setExamObjectTracks] = useState<any[]>([]);
   const [examEvents, setExamEvents] = useState<ExaminationEvent[]>([]);
   const [examZones, setExamZones] = useState<ExaminationZone[]>([]);
   const [selectedPersonId, setSelectedPersonId] = useState<number | null>(null);
@@ -167,6 +168,7 @@ export const WorkbenchView: React.FC = () => {
         setRealCalib(null);
       } else {
         setExamTracks([]);
+        setExamObjectTracks([]);
         setExamEvents([]);
         setExamZones([]);
         setPrimaryExamFinding(null);
@@ -423,12 +425,16 @@ export const WorkbenchView: React.FC = () => {
 
           if (examRes && examRes.ok) {
             const exData = await examRes.json();
-            setExamTracks(exData.tracks || []);
+            const personTracks = exData.person_tracks || (exData.tracks || []).filter((t: any) => t.entity_type === 'person' || !t.entity_type || t.entity_type === 'human');
+            const objectTracks = exData.object_tracks || (exData.tracks || []).filter((t: any) => t.entity_type && t.entity_type !== 'person' && t.entity_type !== 'human');
+            setExamTracks(personTracks);
+            setExamObjectTracks(objectTracks);
             setExamEvents(exData.events || []);
             if (exData.primary_finding) setPrimaryExamFinding(exData.primary_finding);
             if (exData.zones) setExamZones(exData.zones);
+            const allDetsTracks = [...personTracks, ...objectTracks];
             const fMap = new Map<number, any[]>();
-            (exData.tracks || []).forEach((t: any) => {
+            allDetsTracks.forEach((t: any) => {
               const rawTraj = (t.trajectory || []).slice().sort((a: any, b: any) => (a.frame ?? a.frame_index ?? 0) - (b.frame ?? b.frame_index ?? 0));
               for (let i = 0; i < rawTraj.length; i++) {
                 const h = rawTraj[i];
@@ -2012,6 +2018,24 @@ export const WorkbenchView: React.FC = () => {
     }
   };
 
+  const handleUpdateTrackRole = async (trackId: number, newRole: string) => {
+    const targetJobId = activeJobId || activeJobIdRef.current;
+    if (!targetJobId) return;
+    try {
+      const res = await fetch(apiUrl(`/api/v1/jobs/${targetJobId}/examination/tracks/${trackId}/role`), {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ role: newRole, reviewer_notes: 'Role confirmed by proctor in Workbench' })
+      });
+      if (res.ok) {
+        setExamTracks(prev => prev.map(t => t.track_id === trackId ? { ...t, assigned_role: newRole, role_source: 'HUMAN_CONFIRMED' } : t));
+        loadJobResults(targetJobId);
+      }
+    } catch (e) {
+      console.error('Update track role error:', e);
+    }
+  };
+
   // =========================================================================
   // Save Road Calibration directly from Workbench
   // =========================================================================
@@ -3375,7 +3399,7 @@ export const WorkbenchView: React.FC = () => {
               errorDetail={geminiError}
             />
             <ExaminationOverviewCard
-              totalPersons={examTracks.length || liveTrackCount}
+              totalPersons={examTracks.length || (pipelineStage === 'LIVE_INFERENCE' ? liveTrackCount : 0)}
               totalEvents={examEvents.length}
               pendingReviews={examEvents.filter(e => e.review_status === 'PENDING').length}
               acceptedReviews={examEvents.filter(e => e.review_status === 'ACCEPTED').length}
@@ -3384,6 +3408,16 @@ export const WorkbenchView: React.FC = () => {
               studentCount={examTracks.filter(t => t.assigned_role === 'STUDENT').length}
               staffCount={examTracks.filter(t => ['INVIGILATOR', 'EXAM_COORDINATOR', 'AUTHORIZED_STAFF'].includes(t.assigned_role || '')).length}
               unknownCount={examTracks.filter(t => !t.assigned_role || t.assigned_role === 'UNKNOWN').length}
+              objectCount={examObjectTracks.length}
+              sustainedPersons={examTracks.filter(t => {
+                const dur = (t.last_frame - t.first_frame + 1) / (telemetry?.video_fps || 30.0);
+                return dur >= 1.0;
+              }).length}
+              transientPersons={examTracks.filter(t => {
+                const dur = (t.last_frame - t.first_frame + 1) / (telemetry?.video_fps || 30.0);
+                return dur < 1.0;
+              }).length}
+              jobId={activeJobId || undefined}
             />
             <ExaminationEventsTable
               events={examEvents}
@@ -3866,6 +3900,7 @@ export const WorkbenchView: React.FC = () => {
               personTracks={examTracks}
               zones={examZones}
               onReview={handleReviewEvent}
+              onUpdateRole={handleUpdateTrackRole}
               onSeekTime={(tSec) => {
                 if (videoRef.current) {
                   videoRef.current.currentTime = tSec;
