@@ -44,4 +44,6 @@ data/dataset_audit_temp.json
 scratch_check_job.py
 *.docx
 ~$*
+.env
+scratch/
 

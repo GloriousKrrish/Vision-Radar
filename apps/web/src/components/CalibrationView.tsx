@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { useSharedJob } from '../context/SharedJobContext';
 
 const W = 800;
 const H = 450;
@@ -32,6 +33,7 @@ function solve(A: number[][], b: number[]) {
 }
 
 export const CalibrationView: React.FC = () => {
+  const { activeDomain } = useSharedJob();
   const [HP, setHP] = useState<[number, number][]>(() => HP_def.map(p => [...p] as [number, number]));
   const [camHeight, setCamHeight] = useState(9);
   const [camPitch, setCamPitch] = useState(14);
@@ -175,8 +177,32 @@ export const CalibrationView: React.FC = () => {
   const matHtml = Hm.map(r => r.map(v => v.toExponential(3).padStart(11)).join(' ')).join('\n');
 
   return (
-    <div className="grid">
-      <div className="card">
+    <>
+      {activeDomain === 'examination' && (
+        <div style={{
+          gridColumn: '1 / -1',
+          background: 'rgba(99, 102, 241, 0.12)',
+          border: '1px solid rgba(99, 102, 241, 0.35)',
+          borderRadius: '8px',
+          padding: '12px 16px',
+          marginBottom: '16px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '10px',
+          color: '#C7D2FE',
+          fontSize: '13px'
+        }}>
+          <span style={{ fontSize: '18px' }}>ℹ️</span>
+          <div>
+            <b>Road Homography Calibration is specific to the Traffic Domain</b> (for vehicle metric speed estimation).
+            <span style={{ color: '#94A3B8', display: 'block', marginTop: '2px', fontSize: '12px' }}>
+              Examination Intelligence operates with classroom zone mapping and spatial person tracking. To configure road calibration, switch domain to 🚗 Traffic.
+            </span>
+          </div>
+        </div>
+      )}
+      <div className="grid">
+        <div className="card">
         <h3>Drag P1–P4 on the road</h3>
         <canvas
           ref={canvasRef}
@@ -243,5 +269,6 @@ export const CalibrationView: React.FC = () => {
         </div>
       </div>
     </div>
-  );
+  </>
+);
 };

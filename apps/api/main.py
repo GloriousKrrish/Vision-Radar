@@ -30,7 +30,7 @@ from visionradar.cv.calibration import HomographyCalibrator
 from visionradar.cv.analytics import TrafficAnalyticsEngine
 from visionradar.worker.job_worker import (
     run_job, run_job_streaming, get_or_create_queue, drop_job_queue, cleanup_stale_job_queues,
-    cancel_job, cancel_all_active_jobs, is_job_cancelled
+    cancel_job, cancel_all_active_jobs, cancel_active_jobs_for_video, is_job_cancelled, _emit, _JOB_COMPLETED_AT
 )
 from visionradar.services.pdf_report import PDFReportGenerator
 from visionradar.services.excel_export import ExcelExportEngine
@@ -69,9 +69,11 @@ def startup_cleanup():
     db: Session = SessionLocal()
     try:
         stale_jobs = db.query(ProcessingJob).filter(ProcessingJob.status.in_(["RUNNING", "QUEUED"])).all()
+        now = datetime.datetime.now(datetime.timezone.utc)
         for j in stale_jobs:
             j.status = "FAILED"
             j.stage = "Failed"
+            j.completed_at = now
             j.error_message = "Server restarted during job execution"
         if stale_jobs:
             db.commit()
@@ -321,58 +323,15 @@ def get_calibration(calibration_id: int, db: Session = Depends(get_db)):
     return calib
 
 
-# --- Jobs API ---
-@app.post("/api/v1/videos/{video_id}/jobs", response_model=JobResponse)
-async def start_processing_job(video_id: int, payload: JobCreate, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
-    video = db.query(Video).filter(Video.id == video_id).first()
-    if not video:
-        raise HTTPException(status_code=404, detail="Video not found")
-
-    calib_id = payload.calibration_id
-    if calib_id:
-        # Validate that calibration exists and belongs to this exact video
-        c_record = db.query(Calibration).filter(Calibration.id == calib_id).first()
-        if not c_record or c_record.video_id != video_id:
-            calib_id = None
-
-    if not calib_id:
-        v_calib = db.query(Calibration).filter(Calibration.video_id == video_id).order_by(Calibration.version.desc()).first()
-        if v_calib:
-            calib_id = v_calib.id
-        else:
-            calib_id = None
-
-    job = ProcessingJob(
-        video_id=video_id,
-        calibration_id=calib_id,
-        config_json=payload.config_json,
-        status="QUEUED",
-        stage="Queued",
-        progress_pct=0.0
-    )
-    db.add(job)
-    db.commit()
-    db.refresh(job)
-
-    # Phase 22.3: Gracefully cancel prior running jobs so worker threads do not pile up on CPU
-    cancel_all_active_jobs()
-
-    # Capture the current event loop and register the queue BEFORE the thread starts
-    # so the WebSocket handler can find it even if it connects immediately.
-    loop = asyncio.get_event_loop()
-    get_or_create_queue(job.id, loop)
-
-    # Run CV inference in a background thread (non-blocking for the async server)
-    def _run_in_thread():
-        module = (payload.config_json or {}).get("module", "traffic")
-        if module == "examination":
-            from visionradar.examination.pipeline import run_examination_job
-            run_examination_job(job.id)
-        else:
-            run_job_streaming(job.id, loop)
-
-    thread = threading.Thread(target=_run_in_thread, daemon=True, name=f"job-{job.id}")
-    thread.start()
+def serialize_job_response(job: ProcessingJob) -> JobResponse:
+    eff_domain = getattr(job, "domain", None)
+    if not eff_domain:
+        eff_domain = (job.config_json or {}).get("domain") or (job.config_json or {}).get("module") or "traffic"
+    eff_domain = str(eff_domain).strip().lower()
+    if "exam" in eff_domain:
+        eff_domain = "examination"
+    elif "traffic" in eff_domain:
+        eff_domain = "traffic"
 
     return JobResponse(
         id=job.id,
@@ -384,10 +343,98 @@ async def start_processing_job(video_id: int, payload: JobCreate, background_tas
         error_message=job.error_message,
         telemetry=job.telemetry_json,
         config_json=job.config_json,
+        domain=eff_domain,
         created_at=job.created_at,
         started_at=job.started_at,
         completed_at=job.completed_at
     )
+
+
+# --- Jobs API ---
+@app.post("/api/v1/videos/{video_id}/jobs", response_model=JobResponse)
+async def start_processing_job(video_id: int, payload: JobCreate, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    video = db.query(Video).filter(Video.id == video_id).first()
+    if not video:
+        raise HTTPException(status_code=404, detail="Video not found")
+
+    # Phase 5.2 Strict Domain Validation Contract:
+    # An explicit, valid domain ('traffic' or 'examination') is strictly required.
+    # Missing or unrecognized domains MUST NOT silently default to traffic.
+    raw_domain = (
+        payload.domain
+        or (payload.config_json or {}).get("domain")
+        or (payload.config_json or {}).get("module")
+    )
+    if not raw_domain or str(raw_domain).strip().lower() not in ("traffic", "examination"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid or missing domain: '{raw_domain}'. Explicit domain ('traffic' or 'examination') is strictly required."
+        )
+    domain = str(raw_domain).strip().lower()
+
+    calib_id = payload.calibration_id
+    if domain == "examination":
+        # Traffic camera homography calibration must never bind to examination jobs
+        calib_id = None
+    else:
+        if calib_id:
+            # Validate that calibration exists and belongs to this exact video
+            c_record = db.query(Calibration).filter(Calibration.id == calib_id).first()
+            if not c_record or c_record.video_id != video_id:
+                calib_id = None
+
+        if not calib_id:
+            v_calib = db.query(Calibration).filter(Calibration.video_id == video_id).order_by(Calibration.version.desc()).first()
+            if v_calib:
+                calib_id = v_calib.id
+            else:
+                calib_id = None
+
+    cfg = dict(payload.config_json or {})
+    cfg["domain"] = domain
+    cfg["module"] = domain
+
+    job = ProcessingJob(
+        video_id=video_id,
+        calibration_id=calib_id,
+        domain=domain,
+        config_json=cfg,
+        status="QUEUED",
+        stage="Queued",
+        progress_pct=0.0
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+
+    # Phase 5.3: Cancel any prior active jobs specifically on THIS video to prevent duplicate processing,
+    # leaving unrelated jobs on other videos or domains completely isolated and untouched.
+    cancel_active_jobs_for_video(video.id, exclude_job_id=job.id)
+
+    # Capture the current event loop and register the queue BEFORE the thread starts
+    # so the WebSocket handler can find it even if it connects immediately.
+    loop = asyncio.get_event_loop()
+    get_or_create_queue(job.id, loop)
+
+    # Run CV inference in a background thread strictly dispatched by authoritative persisted job.domain
+    def _run_in_thread():
+        with SessionLocal() as db_worker:
+            persisted_job = db_worker.query(ProcessingJob).filter(ProcessingJob.id == job.id).first()
+            job_domain = persisted_job.domain if persisted_job and persisted_job.domain else domain
+
+        if job_domain == "examination":
+            from visionradar.examination.pipeline import run_examination_job
+            run_examination_job(job.id)
+        elif job_domain == "traffic":
+            run_job_streaming(job.id, loop)
+        else:
+            import logging
+            logging.getLogger("apps.api.main").error("Unrecognized domain '%s' for job #%d", job_domain, job.id)
+
+    thread = threading.Thread(target=_run_in_thread, daemon=True, name=f"job-{job.id}")
+    thread.start()
+
+    return serialize_job_response(job)
 
 
 @app.post("/api/v1/jobs/{job_id}/cancel", response_model=JobResponse)
@@ -406,22 +453,10 @@ def cancel_processing_job(job_id: int, db: Session = Depends(get_db)):
         job.error_message = "Cancelled by user request"
         db.commit()
         db.refresh(job)
-        drop_job_queue(job_id)
+        _emit(job_id, {"type": "error", "job_id": job_id, "message": "Cancelled by user request"})
+        _JOB_COMPLETED_AT[job_id] = time.time()
 
-    return JobResponse(
-        id=job.id,
-        video_id=job.video_id,
-        calibration_id=job.calibration_id,
-        status=job.status,
-        stage=job.stage,
-        progress_pct=job.progress_pct,
-        error_message=job.error_message,
-        telemetry=job.telemetry_json,
-        config_json=job.config_json,
-        created_at=job.created_at,
-        started_at=job.started_at,
-        completed_at=job.completed_at
-    )
+    return serialize_job_response(job)
 
 
 
@@ -452,11 +487,17 @@ async def websocket_job_stream(websocket: WebSocket, job_id: int):
 
         # If job already completed (e.g. browser reconnecting), immediately notify.
         if job.status == "SUCCEEDED":
+            track_count = 0
+            if job.domain == "examination":
+                from visionradar.models.entities import ExaminationTrackRecord
+                track_count = db.query(ExaminationTrackRecord).filter(ExaminationTrackRecord.job_id == job_id).count()
+            else:
+                track_count = db.query(Track).filter(Track.job_id == job_id).count()
             await websocket.send_json({
                 "type": "completed",
                 "job_id": job_id,
-                "message": "Job already completed — fetch tracks via /api/v1/jobs/{job_id}/tracks",
-                "total_tracks": db.query(Track).filter(Track.job_id == job_id).count()
+                "message": f"Job already completed — fetch tracks via /api/v1/jobs/{job_id}/results",
+                "total_tracks": track_count
             })
             await websocket.close()
             return
@@ -474,7 +515,7 @@ async def websocket_job_stream(websocket: WebSocket, job_id: int):
             await websocket.send_json({
                 "type": "error",
                 "job_id": job_id,
-                "message": "Job was cancelled."
+                "message": job.error_message or "Job was cancelled."
             })
             await websocket.close()
             return
@@ -484,20 +525,25 @@ async def websocket_job_stream(websocket: WebSocket, job_id: int):
         queue = get_or_create_queue(job_id, loop)
 
         while True:
-            if is_job_cancelled(job_id):
-                break
             try:
                 # Wait for next message with a 30-second timeout
                 msg = await asyncio.wait_for(queue.get(), timeout=30.0)
                 await websocket.send_json(msg)
                 queue.task_done()
 
-                # Stop loop on terminal messages
-                if msg.get("type") in ("completed", "error"):
+                # Stop loop on terminal messages (both Traffic and Examination formats)
+                is_terminal = (
+                    msg.get("type") in ("completed", "error")
+                    or msg.get("result_type") == "job_summary"
+                    or msg.get("payload", {}).get("type") in ("completed", "error")
+                    or msg.get("processing_status") in ("SUCCESS", "FAILED", "CANCELLED")
+                )
+                if is_terminal:
                     break
 
             except asyncio.TimeoutError:
                 if is_job_cancelled(job_id):
+                    await websocket.send_json({"type": "error", "job_id": job_id, "message": "Job was cancelled."})
                     break
                 # Send a keepalive ping so the browser doesn't close the WS
                 try:
@@ -532,66 +578,32 @@ def list_jobs(status: Optional[str] = None, db: Session = Depends(get_db)):
     if status:
         query = query.filter(ProcessingJob.status == status)
     jobs = query.order_by(ProcessingJob.created_at.desc()).all()
-    return [
-        JobResponse(
-            id=job.id,
-            video_id=job.video_id,
-            calibration_id=job.calibration_id,
-            status=job.status,
-            stage=job.stage,
-            progress_pct=job.progress_pct,
-            error_message=job.error_message,
-            telemetry=job.telemetry_json,
-            config_json=job.config_json,
-            created_at=job.created_at,
-            started_at=job.started_at,
-            completed_at=job.completed_at
-        )
-        for job in jobs
-    ]
+    return [serialize_job_response(job) for job in jobs]
 
 @app.get("/api/v1/jobs/latest", response_model=JobResponse)
 def get_latest_job(db: Session = Depends(get_db)):
     job = db.query(ProcessingJob).order_by(ProcessingJob.id.desc()).first()
     if not job:
         raise HTTPException(status_code=404, detail="No jobs found")
-    return JobResponse(
-        id=job.id,
-        video_id=job.video_id,
-        calibration_id=job.calibration_id,
-        status=job.status,
-        stage=job.stage,
-        progress_pct=job.progress_pct,
-        error_message=job.error_message,
-        telemetry=job.telemetry_json,
-        config_json=job.config_json,
-        created_at=job.created_at,
-        started_at=job.started_at,
-        completed_at=job.completed_at
-    )
+    return serialize_job_response(job)
 
 @app.get("/api/v1/jobs/{job_id}", response_model=JobResponse)
 def get_job(job_id: int, db: Session = Depends(get_db)):
     job = db.query(ProcessingJob).filter(ProcessingJob.id == job_id).first()
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    return JobResponse(
-        id=job.id,
-        video_id=job.video_id,
-        calibration_id=job.calibration_id,
-        status=job.status,
-        stage=job.stage,
-        progress_pct=job.progress_pct,
-        error_message=job.error_message,
-        telemetry=job.telemetry_json,
-        config_json=job.config_json,
-        created_at=job.created_at,
-        started_at=job.started_at,
-        completed_at=job.completed_at
-    )
+    return serialize_job_response(job)
 
 @app.get("/api/v1/jobs/{job_id}/tracks")
 def get_job_tracks(job_id: int, db: Session = Depends(get_db)):
+    job = db.query(ProcessingJob).filter(ProcessingJob.id == job_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.domain != "traffic":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Job #{job_id} belongs to '{job.domain}' domain. Vehicle tracks are only available for traffic jobs."
+        )
     tracks = db.query(Track).filter(Track.job_id == job_id).all()
     if not tracks:
         return []
@@ -1072,6 +1084,11 @@ def get_job_vehicle_speeds(job_id: int, db: Session = Depends(get_db)):
     job = db.query(ProcessingJob).filter(ProcessingJob.id == job_id).first()
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
+    if job.domain != "traffic":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Job #{job_id} belongs to '{job.domain}' domain. Vehicle speeds are only available for traffic jobs."
+        )
 
     tracks = db.query(Track).filter(Track.job_id == job_id).all()
     if not tracks:
@@ -1364,9 +1381,8 @@ def export_job_excel(job_id: int, mode: str = "final", db: Session = Depends(get
         raise HTTPException(status_code=400, detail="Invalid mode. Must be 'final' or 'snapshot'.")
 
     cfg = job.config_json or {}
-    domain = cfg.get("module", "traffic").lower()
-    if "exam" in domain:
-        domain = "examination"
+    domain = job.domain or cfg.get("domain") or cfg.get("module") or "traffic"
+    domain = "examination" if "exam" in str(domain).lower() else "traffic"
 
     try:
         stream = ExcelExportEngine.generate_workbook(job_id=job.id, db=db, mode=mode_lower)
@@ -1397,7 +1413,8 @@ def get_job_excel_export_preview(job_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Job not found")
 
     cfg = job.config_json or {}
-    domain = "examination" if "exam" in (cfg.get("module") or "").lower() else "traffic"
+    domain = job.domain or cfg.get("domain") or cfg.get("module") or "traffic"
+    domain = "examination" if "exam" in str(domain).lower() else "traffic"
     video = db.query(Video).filter(Video.id == job.video_id).first()
 
     if domain == "traffic":
@@ -1411,13 +1428,35 @@ def get_job_excel_export_preview(job_id: int, db: Session = Depends(get_db)):
             "Detection Records", "Data Dictionary", "Export Metadata"
         ]
     else:
-        track_count = db.query(ExaminationTrackRecord).filter(ExaminationTrackRecord.job_id == job_id).count()
+        person_track_count = db.query(ExaminationTrackRecord).filter(
+            ExaminationTrackRecord.job_id == job_id,
+            ExaminationTrackRecord.entity_type == "person"
+        ).count()
+        object_track_count = db.query(ExaminationTrackRecord).filter(
+            ExaminationTrackRecord.job_id == job_id,
+            ExaminationTrackRecord.entity_type != "person"
+        ).count()
         event_count = db.query(ExaminationEventRecord).filter(ExaminationEventRecord.job_id == job_id).count()
+        reviewed_count = db.query(ExaminationEventRecord).filter(
+            ExaminationEventRecord.job_id == job_id,
+            ExaminationEventRecord.review_status.in_(["ACCEPTED", "REJECTED"])
+        ).count()
+        pending_count = db.query(ExaminationEventRecord).filter(
+            ExaminationEventRecord.job_id == job_id,
+            ExaminationEventRecord.review_status == "PENDING"
+        ).count()
         speed_count = 0
         sheets = [
-            "Executive Summary", "Processing Metadata", "Monitored Persons & Tracks",
-            "Examination Events", "Seating Zones", "Detection Records",
-            "Data Dictionary", "Export Metadata"
+            "Executive Summary",
+            "Monitored Persons & Tracks",
+            "Examination Events",
+            "Evidence Timeline",
+            "Detection Records",
+            "Event Review History",
+            "Seating Zones",
+            "Processing Metadata",
+            "Data Dictionary",
+            "Export Metadata"
         ]
 
     return {
@@ -1429,8 +1468,12 @@ def get_job_excel_export_preview(job_id: int, db: Session = Depends(get_db)):
         "is_complete": job.status in ("SUCCEEDED", "FAILED", "CANCELLED"),
         "recommended_mode": "final" if job.status == "SUCCEEDED" else "snapshot",
         "counts": {
-            "tracks": track_count,
+            "tracks": person_track_count if domain == "examination" else track_count,
+            "person_tracks": person_track_count if domain == "examination" else track_count,
+            "object_tracks": object_track_count if domain == "examination" else 0,
             "events": event_count,
+            "reviewed_events": reviewed_count if domain == "examination" else 0,
+            "pending_events": pending_count if domain == "examination" else 0,
             "speed_records": speed_count
         },
         "planned_sheets": sheets,
@@ -1610,6 +1653,11 @@ def get_examination_job_results(job_id: int, db: Session = Depends(get_db)):
     job = db.query(ProcessingJob).filter(ProcessingJob.id == job_id).first()
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
+    if job.domain != "examination":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Job #{job_id} belongs to '{job.domain}' domain. Examination results are only available for examination jobs."
+        )
 
     tracks = db.query(ExaminationTrackRecord).filter(ExaminationTrackRecord.job_id == job_id).all()
     events = db.query(ExaminationEventRecord).filter(ExaminationEventRecord.job_id == job_id).all()
@@ -1759,6 +1807,11 @@ def get_examination_proctor_report(job_id: int, db: Session = Depends(get_db)):
     job = db.query(ProcessingJob).filter(ProcessingJob.id == job_id).first()
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
+    if job.domain != "examination":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Job #{job_id} belongs to '{job.domain}' domain. Examination report is only available for examination jobs."
+        )
 
     video = db.query(Video).filter(Video.id == job.video_id).first()
     tracks = db.query(ExaminationTrackRecord).filter(ExaminationTrackRecord.job_id == job_id).all()
@@ -1885,6 +1938,15 @@ def get_examination_proctor_report(job_id: int, db: Session = Depends(get_db)):
 @app.get("/api/v1/jobs/{job_id}/examination/audit-report")
 def get_forensic_audit_report(job_id: int, db: Session = Depends(get_db)):
     """Generates a verifiable, cryptographically sealed Examination Forensic Audit Report."""
+    job = db.query(ProcessingJob).filter(ProcessingJob.id == job_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.domain != "examination":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Job #{job_id} belongs to '{job.domain}' domain. Forensic audit report is only available for examination jobs."
+        )
+
     from visionradar.examination.audit_exporter import ForensicAuditExporter
     try:
         report = ForensicAuditExporter.generate_audit_report(job_id, db)
@@ -1898,6 +1960,15 @@ def get_forensic_audit_report(job_id: int, db: Session = Depends(get_db)):
 @app.get("/api/v1/jobs/{job_id}/examination/audit-report/download")
 def download_forensic_audit_report(job_id: int, db: Session = Depends(get_db)):
     """Serves the cryptographic JSON audit report file for downloading and archival."""
+    job = db.query(ProcessingJob).filter(ProcessingJob.id == job_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.domain != "examination":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Job #{job_id} belongs to '{job.domain}' domain. Forensic audit report is only available for examination jobs."
+        )
+
     from visionradar.examination.audit_exporter import ForensicAuditExporter
     try:
         report = ForensicAuditExporter.generate_audit_report(job_id, db)
@@ -1917,6 +1988,15 @@ def download_forensic_audit_report(job_id: int, db: Session = Depends(get_db)):
 @app.get("/api/v1/jobs/{job_id}/examination/audit-report/html")
 def view_forensic_audit_html(job_id: int, db: Session = Depends(get_db)):
     """Serves the self-contained, printable HTML forensic audit dossier for browser printing/PDF saving."""
+    job = db.query(ProcessingJob).filter(ProcessingJob.id == job_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.domain != "examination":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Job #{job_id} belongs to '{job.domain}' domain. Forensic audit HTML is only available for examination jobs."
+        )
+
     from visionradar.examination.audit_exporter import ForensicAuditExporter
     try:
         report = ForensicAuditExporter.generate_audit_report(job_id, db)
@@ -1931,6 +2011,15 @@ def view_forensic_audit_html(job_id: int, db: Session = Depends(get_db)):
 @app.get("/api/v1/jobs/{job_id}/examination/events")
 def list_examination_events(job_id: int, db: Session = Depends(get_db)):
     """List all candidate events for an examination job."""
+    job = db.query(ProcessingJob).filter(ProcessingJob.id == job_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.domain != "examination":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Job #{job_id} belongs to '{job.domain}' domain. Examination events are only available for examination jobs."
+        )
+
     events = db.query(ExaminationEventRecord).filter(ExaminationEventRecord.job_id == job_id).all()
     results = []
     for e in events:

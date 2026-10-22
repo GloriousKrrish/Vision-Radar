@@ -12,7 +12,7 @@ import { ExcelExportModal } from './components/ExcelExportModal';
 const AppContent: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'wb' | 'cal' | 'exp' | 'arch' | 'bm' | 'rwb'>('wb');
   const [healthStatus, setHealthStatus] = useState<string>('Online');
-  const { activeJobId, activeJob, jobList, selectJob, openExportModal } = useSharedJob();
+  const { activeJobId, activeJob, activeDomain, setDomain, jobList, selectJob, openExportModal } = useSharedJob();
 
   useEffect(() => {
     fetch(apiUrl('/api/v1/health'))
@@ -31,6 +31,63 @@ const AppContent: React.FC = () => {
       <header>
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
           <b>◎ VisionRadar</b>
+
+          {/* Global Authoritative Domain Selector (Phase B) */}
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              background: 'rgba(15, 23, 42, 0.45)',
+              borderRadius: '8px',
+              padding: '2px',
+              border: '1px solid rgba(255, 255, 255, 0.2)'
+            }}
+          >
+            <button
+              type="button"
+              onClick={() => setDomain('traffic')}
+              style={{
+                background: activeDomain === 'traffic' ? '#2563EB' : 'transparent',
+                color: activeDomain === 'traffic' ? '#FFFFFF' : '#94A3B8',
+                border: 'none',
+                borderRadius: '6px',
+                padding: '4px 10px',
+                fontSize: '11px',
+                fontWeight: 700,
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '4px',
+                transition: 'all 0.15s ease'
+              }}
+              title="Switch global workspace domain to Traffic Intelligence"
+            >
+              <span>🚗</span>
+              <span>Traffic</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setDomain('examination')}
+              style={{
+                background: activeDomain === 'examination' ? '#7C3AED' : 'transparent',
+                color: activeDomain === 'examination' ? '#FFFFFF' : '#94A3B8',
+                border: 'none',
+                borderRadius: '6px',
+                padding: '4px 10px',
+                fontSize: '11px',
+                fontWeight: 700,
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '4px',
+                transition: 'all 0.15s ease'
+              }}
+              title="Switch global workspace domain to Examination Proctoring"
+            >
+              <span>🎓</span>
+              <span>Examination</span>
+            </button>
+          </div>
           
           {/* Shared Active Job Context Selector (Phase B) */}
           <div
@@ -64,7 +121,7 @@ const AppContent: React.FC = () => {
             >
               {jobList.length === 0 && <option value="">No jobs found</option>}
               {jobList.map(j => {
-                const isExam = (j.config_json?.module || '').toLowerCase().includes('exam');
+                const isExam = (j.domain || (j.config_json?.domain || j.config_json?.module || '')).toLowerCase().includes('exam');
                 return (
                   <option key={j.id} value={j.id} style={{ color: '#0F172A', background: '#ffffff' }}>
                     #{j.id} {isExam ? '🎓 Exam' : '🚗 Traffic'} · {j.status}

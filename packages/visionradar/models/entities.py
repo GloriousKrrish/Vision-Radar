@@ -60,6 +60,7 @@ class ProcessingJob(Base):
     video_id = Column(Integer, ForeignKey("videos.id"), nullable=False)
     calibration_id = Column(Integer, ForeignKey("calibrations.id"), nullable=True)
     status = Column(String(32), nullable=False, default="QUEUED")  # QUEUED, RUNNING, SUCCEEDED, FAILED, CANCELLED
+    domain = Column(String(32), nullable=False, default="traffic", index=True)
     stage = Column(String(64), nullable=False, default="Decoder")
     progress_pct = Column(Float, nullable=False, default=0.0)
     config_json = Column(JSON, nullable=True)

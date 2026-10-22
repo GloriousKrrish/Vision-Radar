@@ -76,7 +76,7 @@ def test_scenario_b_second_job_supercedes_first():
     _ACTIVE_JOBS.add(j1_id)
 
     # Start a second job via API
-    res = client.post(f"/api/v1/videos/{vid_id}/jobs", json={"calibration_id": None})
+    res = client.post(f"/api/v1/videos/{vid_id}/jobs", json={"calibration_id": None, "domain": "traffic"})
     assert res.status_code == 200
     j2_data = res.json()
     j2_id = j2_data["id"]
@@ -129,7 +129,7 @@ def test_scenario_d_cancelled_job_replaced_by_new_job():
     db.close()
 
     # 2. Start Job 2
-    res = client.post(f"/api/v1/videos/{vid_id}/jobs", json={"calibration_id": None})
+    res = client.post(f"/api/v1/videos/{vid_id}/jobs", json={"calibration_id": None, "domain": "traffic"})
     assert res.status_code == 200
     j2_data = res.json()
     j2_id = j2_data["id"]

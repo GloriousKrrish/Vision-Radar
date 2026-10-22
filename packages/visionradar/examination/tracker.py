@@ -68,12 +68,13 @@ class PersonTracker:
     Isolates person tracking state from vehicle ByteTrack instances.
     Provides IoU + center distance association and smooth occlusion interpolation.
     """
-    def __init__(self, max_lost_frames: int = 30, iou_threshold: float = 0.25, distance_threshold_px: float = 45.0):
+    def __init__(self, max_lost_frames: int = 180, iou_threshold: float = 0.15, distance_threshold_px: float = 120.0):
         self.max_lost_frames = max_lost_frames
         self.iou_threshold = iou_threshold
         self.distance_threshold_px = distance_threshold_px
         self.next_track_id = 1
         self.tracks: List[ExaminationPersonTrack] = []
+        self.all_tracks: Dict[int, ExaminationPersonTrack] = {}
 
     def update(self, raw_person_detections: List[Dict[str, Any]], frame_index: int) -> List[PersonDetection]:
         """
@@ -126,8 +127,9 @@ class PersonTracker:
                 frame_index=frame_index,
                 size_category=det.get("size_category", "medium")
             )
-            self.next_track_id += 1
             self.tracks.append(new_trk)
+            self.all_tracks[self.next_track_id] = new_trk
+            self.next_track_id += 1
 
         self.tracks = [t for t in self.tracks if t.time_since_update <= self.max_lost_frames]
 
@@ -148,13 +150,17 @@ class PersonTracker:
                         posture_orientation=t.orientation
                     )
                 )
-            elif t.time_since_update <= 2:
+            elif t.time_since_update <= 30:
                 # Smooth brief occlusions so distant students do not flicker
+                t.history.append({"frame": frame_index, "bbox": list(t.bbox)})
+                if len(t.history) > 10000:
+                    t.history.pop(0)
+                t.last_frame = frame_index
                 active_persons.append(
                     PersonDetection(
                         track_id=t.track_id,
                         bbox=t.bbox,
-                        confidence=round(t.confidence * 0.95, 4),
+                        confidence=t.confidence,
                         assigned_role=t.assigned_role,
                         role_source=t.role_source,
                         is_interpolated=True,
@@ -170,16 +176,20 @@ class PersonTracker:
     def predict_step(self, frame_index: int) -> List[PersonDetection]:
         """
         Propagates active person tracks during skipped frames for speed optimization.
-        Keeps visual boxes active without running expensive neural network inference.
+        Keeps visual boxes active and records trajectory history without running expensive neural network inference.
         """
         active_persons = []
         for t in self.tracks:
-            if t.time_since_update <= 3:
+            if t.time_since_update <= 30:
+                t.history.append({"frame": frame_index, "bbox": list(t.bbox)})
+                if len(t.history) > 10000:
+                    t.history.pop(0)
+                t.last_frame = frame_index
                 active_persons.append(
                     PersonDetection(
                         track_id=t.track_id,
                         bbox=t.bbox,
-                        confidence=round(t.confidence * 0.99, 4),
+                        confidence=t.confidence,
                         assigned_role=t.assigned_role,
                         role_source=t.role_source,
                         is_interpolated=True,
@@ -216,7 +226,7 @@ class ExaminationObjectTrack:
         self.time_since_update = 0
         self.observation_count += 1
         self.history.append({"frame": frame_index, "bbox": list(bbox), "conf": confidence})
-        if len(self.history) > 150:
+        if len(self.history) > 10000:
             self.history.pop(0)
 
     def mark_missed(self):
@@ -228,12 +238,13 @@ class ExaminationObjectTracker:
     Dedicated tracker for physical examination objects across sequential frames.
     Maintains track continuity under hand occlusions and movements.
     """
-    def __init__(self, max_lost_frames: int = 20, iou_threshold: float = 0.20, distance_threshold_px: float = 90.0):
+    def __init__(self, max_lost_frames: int = 90, iou_threshold: float = 0.15, distance_threshold_px: float = 120.0):
         self.max_lost_frames = max_lost_frames
         self.iou_threshold = iou_threshold
         self.distance_threshold_px = distance_threshold_px
         self.next_object_track_id = 1
         self.tracks: List[ExaminationObjectTrack] = []
+        self.all_tracks: Dict[int, ExaminationObjectTrack] = {}
 
     def update(self, raw_objects: List[ExaminationObjectDetection], frame_index: int) -> List[ExaminationObjectDetection]:
         for t in self.tracks:
@@ -282,8 +293,9 @@ class ExaminationObjectTracker:
                 frame_index=frame_index
             )
             obj.object_track_id = self.next_object_track_id
-            self.next_object_track_id += 1
             self.tracks.append(new_trk)
+            self.all_tracks[self.next_object_track_id] = new_trk
+            self.next_object_track_id += 1
 
         self.tracks = [t for t in self.tracks if t.time_since_update <= self.max_lost_frames]
         return raw_objects
@@ -291,17 +303,22 @@ class ExaminationObjectTracker:
     def predict_step(self, frame_index: int) -> List[ExaminationObjectDetection]:
         """
         Propagates active object tracks during skipped frames for speed optimization.
+        Keeps visual boxes active and records trajectory history.
         """
         active_objects = []
         for t in self.tracks:
-            if t.time_since_update <= 3:
+            if t.time_since_update <= 15:
+                t.history.append({"frame": frame_index, "bbox": list(t.bbox), "conf": t.confidence})
+                if len(t.history) > 10000:
+                    t.history.pop(0)
+                t.last_frame = frame_index
                 active_objects.append(
                     ExaminationObjectDetection(
                         object_id=t.object_track_id,
                         object_track_id=t.object_track_id,
                         object_class=t.object_class,
                         bbox=t.bbox,
-                        confidence=round(t.confidence * 0.99, 4),
+                        confidence=round(t.confidence, 4),
                         near_person_track_id=t.associated_person_track_id,
                         association_status=t.association_status,
                         association_confidence=t.association_confidence,

@@ -48,7 +48,7 @@ def test_3_job_creation_auto_resolves_calibration():
     assert video is not None
     db.close()
 
-    res = client.post(f"/api/v1/videos/{video.id}/jobs", json={"calibration_id": None})
+    res = client.post(f"/api/v1/videos/{video.id}/jobs", json={"calibration_id": None, "domain": "traffic"})
     assert res.status_code == 200
     job_data = res.json()
     assert job_data["calibration_id"] is not None, "Job should auto-link default calibration instead of None"

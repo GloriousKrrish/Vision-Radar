@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { ExaminationEvent, ExaminationPersonTrack, ExaminationZone, SceneClassificationResult, AnalysisModule, GeminiStatus, GeminiExamAnalysis } from '../types';
+import { useSharedJob } from '../context/SharedJobContext';
 
 // ===========================================================================
 // Scene Recommendation Banner
@@ -141,6 +142,7 @@ export const PrimaryFindingPanel: React.FC<PrimaryFindingProps> = ({
   onSeekTime,
   jobId
 }) => {
+  const { openExportModal } = useSharedJob();
   const [noteDraft, setNoteDraft] = useState('');
   const [downloading, setDownloading] = useState(false);
 
@@ -196,7 +198,27 @@ export const PrimaryFindingPanel: React.FC<PrimaryFindingProps> = ({
             </div>
           </div>
           {jobId && (
-            <div style={{ display: 'flex', gap: '6px' }}>
+            <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+              <button
+                onClick={() => openExportModal(jobId)}
+                style={{
+                  background: '#10B981',
+                  color: '#FFFFFF',
+                  border: 'none',
+                  padding: '6px 12px',
+                  borderRadius: '5px',
+                  fontSize: '11px',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '4px'
+                }}
+                title="Export this examination job to Professional Multi-Sheet Excel Workbook (.xlsx)"
+              >
+                <span>📊</span>
+                <span>Export to Excel (.xlsx)</span>
+              </button>
               <button
                 onClick={handleOpenPrintableDossier}
                 style={{
@@ -227,7 +249,7 @@ export const PrimaryFindingPanel: React.FC<PrimaryFindingProps> = ({
                 }}
                 title="Download signed JSON audit evidence package"
               >
-                📥 Export JSON
+                📄 Signed JSON Package
               </button>
             </div>
           )}
@@ -295,7 +317,27 @@ export const PrimaryFindingPanel: React.FC<PrimaryFindingProps> = ({
             STATUS: {primaryFinding.review_status}
           </span>
           {jobId && (
-            <div style={{ display: 'flex', gap: '6px' }}>
+            <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+              <button
+                onClick={() => openExportModal(jobId)}
+                style={{
+                  background: '#10B981',
+                  color: '#FFFFFF',
+                  border: 'none',
+                  padding: '5px 12px',
+                  borderRadius: '5px',
+                  fontSize: '11px',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '4px'
+                }}
+                title="Export this examination job to Professional Multi-Sheet Excel Workbook (.xlsx)"
+              >
+                <span>📊</span>
+                <span>Export to Excel (.xlsx)</span>
+              </button>
               <button
                 onClick={handleOpenPrintableDossier}
                 style={{
@@ -326,7 +368,7 @@ export const PrimaryFindingPanel: React.FC<PrimaryFindingProps> = ({
                 }}
                 title="Download signed JSON audit evidence package"
               >
-                📥 Export JSON
+                📄 Signed JSON Package
               </button>
             </div>
           )}
@@ -709,6 +751,7 @@ interface ExamOverviewProps {
   studentCount?: number;
   staffCount?: number;
   unknownCount?: number;
+  jobId?: number;
 }
 
 export const ExaminationOverviewCard: React.FC<ExamOverviewProps> = ({
@@ -720,24 +763,49 @@ export const ExaminationOverviewCard: React.FC<ExamOverviewProps> = ({
   pipelineStatus,
   studentCount = 0,
   staffCount = 0,
-  unknownCount = 0
+  unknownCount = 0,
+  jobId
 }) => {
+  const { openExportModal } = useSharedJob();
+
   return (
     <div className="card" style={{ marginTop: '16px' }}>
-      <h3 style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+      <h3 style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <span>🎓 Examination &amp; Proctoring Intelligence</span>
           <span className="badge" style={{ background: '#EEF2FF', color: '#4F46E5', fontWeight: 700 }}>
             DOMAIN: CLASSROOM / EXAMINATION
           </span>
         </div>
-        <span className="badge" style={{
-          background: pendingReviews > 0 ? '#FEF3C7' : '#D1FAE5',
-          color: pendingReviews > 0 ? '#92400E' : '#065F46',
-          fontWeight: 700, fontSize: '12px'
-        }}>
-          {pendingReviews > 0 ? `⚠️ ${pendingReviews} EVENTS REQUIRE HUMAN REVIEW` : '✓ PROCTOR REVIEW UP TO DATE'}
-        </span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <button
+            onClick={() => openExportModal(jobId)}
+            style={{
+              background: '#10B981',
+              color: '#FFFFFF',
+              border: 'none',
+              padding: '5px 12px',
+              borderRadius: '5px',
+              fontSize: '11px',
+              fontWeight: 700,
+              cursor: 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '4px'
+            }}
+            title="Export Examination Intelligence to Excel (.xlsx)"
+          >
+            <span>📊</span>
+            <span>Export to Excel (.xlsx)</span>
+          </button>
+          <span className="badge" style={{
+            background: pendingReviews > 0 ? '#FEF3C7' : '#D1FAE5',
+            color: pendingReviews > 0 ? '#92400E' : '#065F46',
+            fontWeight: 700, fontSize: '12px'
+          }}>
+            {pendingReviews > 0 ? `⚠️ ${pendingReviews} EVENTS REQUIRE HUMAN REVIEW` : '✓ PROCTOR REVIEW UP TO DATE'}
+          </span>
+        </div>
       </h3>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px', margin: '12px 0' }}>

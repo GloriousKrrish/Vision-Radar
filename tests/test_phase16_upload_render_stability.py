@@ -108,7 +108,7 @@ def test_real_video_upload_endpoint_and_job_creation():
     assert video_data["filename"] == "test_upload.mp4"
 
     # Test triggering a job for the uploaded video
-    r_job = client.post(f"/api/v1/videos/{video_data['id']}/jobs", json={"calibration_id": None})
+    r_job = client.post(f"/api/v1/videos/{video_data['id']}/jobs", json={"calibration_id": None, "domain": "traffic"})
     assert r_job.status_code == 200
     job_data = r_job.json()
     assert "id" in job_data

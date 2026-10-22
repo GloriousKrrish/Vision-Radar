@@ -55,6 +55,7 @@ class CalibrationResponse(BaseModel):
 class JobCreate(BaseModel):
     calibration_id: Optional[int] = None
     config_json: Optional[Dict[str, Any]] = None
+    domain: Optional[str] = None
 
 class JobResponse(BaseModel):
     id: int
@@ -66,6 +67,7 @@ class JobResponse(BaseModel):
     error_message: Optional[str]
     telemetry: Optional[Dict[str, Any]] = None
     config_json: Optional[Any] = None
+    domain: str = "traffic"
     created_at: datetime.datetime
     started_at: Optional[datetime.datetime] = None
     completed_at: Optional[datetime.datetime] = None

@@ -85,11 +85,13 @@ export type PipelineStage =
 // WorkbenchView Component
 // ===========================================================================
 export const WorkbenchView: React.FC = () => {
-  const { activeJobId: sharedJobId, selectJob: selectSharedJob, openExportModal } = useSharedJob();
+  const { activeJobId: sharedJobId, activeJob, activeDomain, setDomain, selectJob: selectSharedJob, openExportModal } = useSharedJob();
 
   // --- playback state ---
   const [frame, setFrame] = useState(0);
   const [playing, setPlaying] = useState(true);
+  const [playbackError, setPlaybackError] = useState<string | null>(null);
+  const [isUploading, setIsUploading] = useState<boolean>(false);
 
   // --- demo/real mode ---
   const [isRealVideo, setIsRealVideo] = useState(true);
@@ -134,7 +136,7 @@ export const WorkbenchView: React.FC = () => {
   const [renderTick, setRenderTick] = useState<number>(0);
 
   // --- Universal Multi-Domain & Scene Routing State ---
-  const [activeModule, setActiveModule] = useState<AnalysisModule>('traffic');
+  const [activeModule, setActiveModule] = useState<AnalysisModule>(activeDomain || 'traffic');
   const [sceneRec, setSceneRec] = useState<(SceneClassificationResult & { video_id: number; video_name: string }) | null>(null);
   const [isClassifying, setIsClassifying] = useState<boolean>(false);
   const [examTracks, setExamTracks] = useState<ExaminationPersonTrack[]>([]);
@@ -147,6 +149,30 @@ export const WorkbenchView: React.FC = () => {
   const [isAnalyzingGemini, setIsAnalyzingGemini] = useState<boolean>(false);
   const [geminiError, setGeminiError] = useState<string | null>(null);
   const [processingMode, setProcessingMode] = useState<ProcessingMode>('balanced');
+
+  // Bi-directional authoritative synchronization with SharedJobContext domain
+  useEffect(() => {
+    if (activeDomain && activeDomain !== activeModuleRef.current) {
+      setActiveModule(activeDomain);
+      activeModuleRef.current = activeDomain;
+      rtFrameBufferRef.current.clear();
+      frameMapRef.current.clear();
+      seenRef.current.clear();
+      setSelTrack(null);
+      setSelectedPersonId(null);
+      lastRenderedFrameIdRef.current = -1;
+      if (activeDomain === 'examination') {
+        setRealTracks([]);
+        setViolations([]);
+        setRealCalib(null);
+      } else {
+        setExamTracks([]);
+        setExamEvents([]);
+        setExamZones([]);
+        setPrimaryExamFinding(null);
+      }
+    }
+  }, [activeDomain]);
 
   // --- crowded-scene intelligent visualization state ---
   const [vizMode, setVizMode] = useState<'MINIMAL' | 'STANDARD' | 'INTELLIGENCE'>('STANDARD');
@@ -183,142 +209,17 @@ export const WorkbenchView: React.FC = () => {
   const isRealVideoRef = useRef<boolean>(true);
   const pipelineStageRef = useRef<PipelineStage>('IDLE');
   const activeJobIdRef = useRef<number | null>(null);
+  const activeModuleRef = useRef<AnalysisModule>(activeModule);
   const lastFrameRef = useRef<number>(-1);
 
   useEffect(() => { isRealVideoRef.current = isRealVideo; }, [isRealVideo]);
   useEffect(() => { pipelineStageRef.current = pipelineStage; }, [pipelineStage]);
   useEffect(() => { activeJobIdRef.current = activeJobId; }, [activeJobId]);
+  useEffect(() => { activeModuleRef.current = activeModule; }, [activeModule]);
 
   useEffect(() => { calcH(); }, []);
 
-  // =========================================================================
-  // Auto-load last succeeded job on startup (if idle)
-  // =========================================================================
-  useEffect(() => {
-    if (pipelineStage !== 'IDLE') return;
-    const selectCompletedJob = async () => {
-      try {
-        const res = await fetch(apiUrl('/api/v1/jobs?status=SUCCEEDED'));
-        if (!res.ok) return;
-        const jobs = await res.json();
-        if (!jobs?.length) return;
-        let job = null;
-        for (const j of jobs) {
-          try {
-            // Verify video stream is physically available on disk (HEAD request)
-            const check = await fetch(apiUrl(`/api/v1/videos/${j.video_id}/stream`), { method: 'HEAD' });
-            if (check.ok) {
-              job = j;
-              break;
-            }
-          } catch {}
-        }
-        if (!job) return;
 
-        setIsRealVideo(true);
-        isRealVideoRef.current = true;
-        setActiveJobId(job.id);
-        activeJobIdRef.current = job.id;
-        setActiveVideoId(job.video_id);
-        setJobStatusText(`Job #${job.id} Complete — REAL VIDEO · LIVE AI`);
-        setPipelineStage('COMPLETED');
-        if (job.telemetry) setTelemetry(job.telemetry);
-
-        rtFrameBufferRef.current.clear();
-        frameMapRef.current.clear();
-
-        const streamUrl = apiUrl(`/api/v1/videos/${job.video_id}/stream`);
-        setVideoSrc(streamUrl);
-        if (videoRef.current) {
-          videoRef.current.muted = true;
-          videoRef.current.defaultMuted = true;
-          videoRef.current.src = streamUrl;
-          videoRef.current.loop = true;
-          videoRef.current.load();
-          videoRef.current.play().catch(() => {});
-        }
-
-        let startupModule: AnalysisModule = 'traffic';
-        if (job.config_json) {
-          try {
-            const parsed = typeof job.config_json === 'string' ? JSON.parse(job.config_json) : job.config_json;
-            if (parsed?.module === 'examination') startupModule = 'examination';
-          } catch {}
-        }
-        setActiveModule(startupModule);
-
-        const [trkRes, calibRes, vidInfoRes, examRes, zonesRes] = await Promise.all([
-          startupModule === 'traffic' ? fetch(apiUrl(`/api/v1/jobs/${job.id}/tracks`)).catch(() => null) : Promise.resolve(null),
-          startupModule === 'traffic' ? fetch(apiUrl(`/api/v1/videos/${job.video_id}/calibrations`)).catch(() => null) : Promise.resolve(null),
-          fetch(apiUrl(`/api/v1/videos/${job.video_id}`)).catch(() => null),
-          startupModule === 'examination' ? fetch(apiUrl(`/api/v1/jobs/${job.id}/examination/results`)).catch(() => null) : Promise.resolve(null),
-          startupModule === 'examination' ? fetch(apiUrl(`/api/v1/videos/${job.video_id}/examination/zones`)).catch(() => null) : Promise.resolve(null)
-        ]);
-
-        if (vidInfoRes && vidInfoRes.ok) {
-          const vData = await vidInfoRes.json();
-          if (vData.filename) setSrcName(vData.filename);
-          setTelemetry((prev: any) => ({
-            ...(prev || {}),
-            source_width: vData.width || prev?.source_width || 1920,
-            source_height: vData.height || prev?.source_height || 1080,
-            video_fps: vData.fps || prev?.video_fps || 29.97,
-            video_duration_sec: vData.duration_sec || prev?.video_duration_sec || 0.0,
-            total_frames: prev?.total_frames || Math.floor((vData.duration_sec || 0) * (vData.fps || 29.97))
-          }));
-        }
-
-        if (startupModule === 'traffic') {
-          if (trkRes && trkRes.ok) {
-            const trkData = await trkRes.json();
-            if (trkData?.length) {
-              setRealTracks(trkData);
-            }
-          }
-          if (calibRes && calibRes.ok) {
-            const calibData = await calibRes.json();
-            if (calibData?.length) setRealCalib(calibData[0]);
-          }
-        } else {
-          if (examRes && examRes.ok) {
-            const exData = await examRes.json();
-            setExamTracks(exData.tracks || []);
-            setExamEvents(exData.events || []);
-            if (exData.primary_finding) setPrimaryExamFinding(exData.primary_finding);
-            if (exData.zones) setExamZones(exData.zones);
-            const fMap = new Map<number, any[]>();
-            (exData.tracks || []).forEach((t: any) => {
-              (t.trajectory || []).forEach((h: any) => {
-                const f = h.frame;
-                const bbox = h.bbox;
-                const det = {
-                  track_id: t.track_id,
-                  entity_type: 'person',
-                  rx: bbox[0],
-                  ry: bbox[1],
-                  rw: bbox[2] - bbox[0],
-                  rh: bbox[3] - bbox[1],
-                  confidence: 0.9,
-                  assigned_zone: t.assigned_zone
-                };
-                if (!fMap.has(f)) fMap.set(f, []);
-                fMap.get(f)!.push(det);
-              });
-            });
-            frameMapRef.current = fMap;
-          }
-          if (zonesRes && zonesRes.ok) {
-            const zData = await zonesRes.json();
-            setExamZones(zData || []);
-          }
-        }
-      } catch (e) {
-        console.error('Auto-load failed:', e);
-      }
-    };
-    selectCompletedJob();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   // =========================================================================
   // Build finalized frame map from DB tracks
@@ -421,43 +322,47 @@ export const WorkbenchView: React.FC = () => {
       return; // Stale job rejection
     }
     try {
-      const [trkRes, violsRes, jobRes] = await Promise.all([
-        fetch(apiUrl(`/api/v1/jobs/${jobId}/tracks`)).catch(() => null),
-        fetch(apiUrl(`/api/v1/violations?job_id=${jobId}&limit=30`)).catch(() => null),
-        fetch(apiUrl(`/api/v1/jobs/${jobId}`)).catch(() => null)
-      ]);
+      // 1. Fetch authoritative job metadata first to determine domain
+      const jobRes = await fetch(apiUrl(`/api/v1/jobs/${jobId}`)).catch(() => null);
+      if (!jobRes || !jobRes.ok) return;
+      const jobData = await jobRes.json();
 
       if (activeJobIdRef.current !== null && activeJobIdRef.current !== jobId) {
         return; // Stale job rejection after async response
       }
 
-      const trkData = (trkRes && trkRes.ok) ? await trkRes.json() : [];
-      const violsData = (violsRes && violsRes.ok) ? await violsRes.json() : [];
-      const jobData = (jobRes && jobRes.ok) ? await jobRes.json() : null;
+      const authDomain = jobData.domain || ((jobData.config_json || {}).domain || (jobData.config_json || {}).module || '').toLowerCase();
+      const jobModule: AnalysisModule = authDomain.includes('exam') ? 'examination' : 'traffic';
 
-      let jobModule: AnalysisModule = 'traffic';
-      if (jobData?.config_json) {
-        try {
-          const cfg = typeof jobData.config_json === 'string' ? JSON.parse(jobData.config_json) : jobData.config_json;
-          if (cfg?.module === 'examination') jobModule = 'examination';
-          if (cfg?.speed_limit_kmh !== undefined && cfg?.speed_limit_kmh !== null) {
-            const lim = Number(cfg.speed_limit_kmh) || 80;
-            const tol = Number(cfg.warning_tolerance_kmh || 0);
-            setSpeedLimit(lim);
-            setSpeedLimitInput(lim);
-            setAppliedSpeedLimit(lim);
-            setWarningToleranceInput(tol);
-            setAppliedTolerance(tol);
-            setIsConfigUnsaved(false);
-          }
-        } catch {}
-      }
       setActiveModule(jobModule);
+      activeModuleRef.current = jobModule;
+
+      // Clear frame buffers
+      rtFrameBufferRef.current.clear();
+      frameMapRef.current.clear();
+      setSelTrack(null);
+      setSelectedPersonId(null);
+      lastRenderedFrameIdRef.current = -1;
 
       if (jobModule === 'traffic') {
-        if (trkData?.length) {
-          setRealTracks(trkData);
-        }
+        // Clear examination records to enforce domain separation
+        setExamTracks([]);
+        setExamEvents([]);
+        setExamZones([]);
+        setPrimaryExamFinding(null);
+
+        // Fetch traffic tracks and violations only
+        const [trkRes, violsRes] = await Promise.all([
+          fetch(apiUrl(`/api/v1/jobs/${jobId}/tracks`)).catch(() => null),
+          fetch(apiUrl(`/api/v1/violations?job_id=${jobId}&limit=30`)).catch(() => null)
+        ]);
+
+        if (activeJobIdRef.current !== null && activeJobIdRef.current !== jobId) return;
+
+        const trkData = (trkRes && trkRes.ok) ? await trkRes.json() : [];
+        const violsData = (violsRes && violsRes.ok) ? await violsRes.json() : [];
+
+        setRealTracks(trkData || []);
         if (violsData?.length) {
           setViolations(violsData.map((v: any) => ({
             id: v.id,
@@ -485,12 +390,37 @@ export const WorkbenchView: React.FC = () => {
         } else {
           setViolations([]);
         }
+
+        if (jobData?.config_json) {
+          try {
+            const cfg = typeof jobData.config_json === 'string' ? JSON.parse(jobData.config_json) : jobData.config_json;
+            if (cfg?.speed_limit_kmh !== undefined && cfg?.speed_limit_kmh !== null) {
+              const lim = Number(cfg.speed_limit_kmh) || 80;
+              const tol = Number(cfg.warning_tolerance_kmh || 0);
+              setSpeedLimit(lim);
+              setSpeedLimitInput(lim);
+              setAppliedSpeedLimit(lim);
+              setWarningToleranceInput(tol);
+              setAppliedTolerance(tol);
+              setIsConfigUnsaved(false);
+            }
+          } catch {}
+        }
       } else {
+        // Clear traffic records to enforce domain separation
+        setRealTracks([]);
+        setViolations([]);
+        setRealCalib(null);
+
+        // Fetch examination results and zones only
         try {
           const [examRes, zonesRes] = await Promise.all([
             fetch(apiUrl(`/api/v1/jobs/${jobId}/examination/results`)).catch(() => null),
-            jobData ? fetch(apiUrl(`/api/v1/videos/${jobData.video_id}/examination/zones`)).catch(() => null) : Promise.resolve(null)
+            fetch(apiUrl(`/api/v1/videos/${jobData.video_id}/examination/zones`)).catch(() => null)
           ]);
+
+          if (activeJobIdRef.current !== null && activeJobIdRef.current !== jobId) return;
+
           if (examRes && examRes.ok) {
             const exData = await examRes.json();
             setExamTracks(exData.tracks || []);
@@ -499,9 +429,13 @@ export const WorkbenchView: React.FC = () => {
             if (exData.zones) setExamZones(exData.zones);
             const fMap = new Map<number, any[]>();
             (exData.tracks || []).forEach((t: any) => {
-              (t.trajectory || []).forEach((h: any) => {
-                const f = h.frame;
+              const rawTraj = (t.trajectory || []).slice().sort((a: any, b: any) => (a.frame ?? a.frame_index ?? 0) - (b.frame ?? b.frame_index ?? 0));
+              for (let i = 0; i < rawTraj.length; i++) {
+                const h = rawTraj[i];
+                const f = h.frame ?? h.frame_index;
+                if (f === undefined || f === null) continue;
                 const bbox = h.bbox;
+                if (!bbox || bbox.length < 4) continue;
                 const det = {
                   track_id: t.track_id,
                   entity_type: t.entity_type || 'person',
@@ -509,14 +443,41 @@ export const WorkbenchView: React.FC = () => {
                   ry: bbox[1],
                   rw: bbox[2] - bbox[0],
                   rh: bbox[3] - bbox[1],
-                  confidence: h.conf ?? 0.9,
+                  confidence: h.conf ?? t.confidence ?? 0.9,
                   assigned_zone: t.assigned_zone,
                   assigned_role: t.assigned_role,
                   role_source: t.role_source
                 };
                 if (!fMap.has(f)) fMap.set(f, []);
                 fMap.get(f)!.push(det);
-              });
+
+                if (i < rawTraj.length - 1) {
+                  const nextH = rawTraj[i + 1];
+                  const nextF = nextH.frame ?? nextH.frame_index;
+                  const gap = nextF - f;
+                  if (gap > 1 && gap <= 45 && nextH.bbox && nextH.bbox.length >= 4) {
+                    for (let ifr = f + 1; ifr < nextF; ifr++) {
+                      const alpha = (ifr - f) / gap;
+                      const interpBbox = [
+                        bbox[0] + alpha * (nextH.bbox[0] - bbox[0]),
+                        bbox[1] + alpha * (nextH.bbox[1] - bbox[1]),
+                        bbox[2] + alpha * (nextH.bbox[2] - bbox[2]),
+                        bbox[3] + alpha * (nextH.bbox[3] - bbox[3]),
+                      ];
+                      const interpDet = {
+                        ...det,
+                        rx: interpBbox[0],
+                        ry: interpBbox[1],
+                        rw: interpBbox[2] - interpBbox[0],
+                        rh: interpBbox[3] - interpBbox[1],
+                        is_interpolated: true
+                      };
+                      if (!fMap.has(ifr)) fMap.set(ifr, []);
+                      fMap.get(ifr)!.push(interpDet);
+                    }
+                  }
+                }
+              }
             });
             frameMapRef.current = fMap;
           }
@@ -529,6 +490,17 @@ export const WorkbenchView: React.FC = () => {
         }
       }
 
+      if (jobData.video_id) {
+        setActiveVideoId(jobData.video_id);
+        const streamUrl = apiUrl(`/api/v1/videos/${jobData.video_id}/stream`);
+        setVideoSrc(streamUrl);
+        if (videoRef.current) {
+          videoRef.current.src = streamUrl;
+          videoRef.current.load();
+          videoRef.current.play().catch(() => {});
+        }
+      }
+
       if (jobData?.telemetry) {
         setTelemetry(jobData.telemetry);
         if (jobData.telemetry.average_fps) setProcessingFps(jobData.telemetry.average_fps);
@@ -536,21 +508,58 @@ export const WorkbenchView: React.FC = () => {
       }
       setPipelineStage('COMPLETED');
       setJobStatusText(`Job #${jobId} COMPLETED — REAL VIDEO · LIVE AI ANALYSIS [${jobModule.toUpperCase()}]`);
+      selectSharedJob(jobId);
     } catch (err) {
       console.error('Failed to load job results:', err);
       setPipelineStage('COMPLETED');
       setJobStatusText(`Job #${jobId} Complete — REAL VIDEO · LIVE AI ANALYSIS`);
     }
-  }, []);
+  }, [selectSharedJob]);
 
-  // Rest Polling Fallback to guarantee job state synchronization if WebSocket disconnects or finishes fast
+  // =========================================================================
+  // Authoritative Domain & Job Synchronization on startup / header selection
+  // =========================================================================
   useEffect(() => {
-    if (sharedJobId && sharedJobId !== activeJobId && pipelineStage !== 'LIVE_INFERENCE' && pipelineStage !== 'UPLOADING') {
+    // 1. If a shared job is selected from the header, sync to it immediately (if not actively streaming)
+    if (sharedJobId && sharedJobId !== activeJobIdRef.current && !isLiveStreamingRef.current) {
       setActiveJobId(sharedJobId);
       activeJobIdRef.current = sharedJobId;
       loadJobResults(sharedJobId);
+      return;
     }
-  }, [sharedJobId, activeJobId, pipelineStage, loadJobResults]);
+
+    // 2. If idle on startup, auto-load the latest succeeded job matching activeDomain
+    if (pipelineStage === 'IDLE' && !activeJobIdRef.current) {
+      const selectCompletedJob = async () => {
+        try {
+          const res = await fetch(apiUrl('/api/v1/jobs?status=SUCCEEDED'));
+          if (!res.ok) return;
+          const jobs = await res.json();
+          if (!jobs?.length) return;
+
+          const targetDomain = activeDomain || activeModuleRef.current || 'traffic';
+          let matchingJob = jobs.find((j: any) => {
+            const authDomain = (j.domain || (j.config_json || {}).domain || (j.config_json || {}).module || '').toLowerCase();
+            return targetDomain === 'examination' ? authDomain.includes('exam') : !authDomain.includes('exam');
+          });
+
+          if (!matchingJob) {
+            matchingJob = jobs[0];
+          }
+
+          if (matchingJob) {
+            setActiveJobId(matchingJob.id);
+            activeJobIdRef.current = matchingJob.id;
+            selectSharedJob(matchingJob.id);
+            loadJobResults(matchingJob.id);
+          }
+        } catch (e) {
+          console.error('Domain-scoped auto-load failed:', e);
+        }
+      };
+      selectCompletedJob();
+    }
+  }, [sharedJobId, pipelineStage, activeDomain, selectSharedJob, loadJobResults]);
 
   useEffect(() => {
     if (!activeJobId || pipelineStage === 'COMPLETED' || pipelineStage === 'ERROR' || pipelineStage === 'IDLE') {
@@ -743,9 +752,57 @@ export const WorkbenchView: React.FC = () => {
       const payload = msg.payload || msg;
       const type = msg.type;
 
+      // Handle terminal completion or error BEFORE any domain drop guards
+      const isTerminalCompleted = type === 'completed' || msg.result_type === 'job_completed' || msg.result_type === 'job_summary' || payload?.type === 'completed';
+      const isTerminalError = type === 'error' || payload?.type === 'error';
+
+      if (isTerminalCompleted) {
+        isLiveStreamingRef.current = false;
+        if (videoRef.current) {
+          videoRef.current.playbackRate = 1.0;
+          videoRef.current.loop = true;
+          videoRef.current.play().catch(() => {});
+        }
+        setWsConnected(false);
+        setPipelineStage('FINALIZING');
+        setJobStatusText(`Job #${jobId} complete — loading finalized results...`);
+        const fps = msg.processing_fps || payload?.throughput_fps || payload?.processing_fps;
+        if (fps) setProcessingFps(fps);
+        const rtf = msg.real_time_factor || payload?.real_time_factor;
+        if (rtf) setRealTimeFactor(rtf);
+        if (msg.first_detection_latency_s && uploadStartRef.current > 0) {
+          setFirstDetectionMs(Math.round(msg.first_detection_latency_s * 1000));
+        }
+
+        const jId = msg.job_id || payload?.job_id || jobId || activeJobIdRef.current;
+        if (jId) {
+          loadJobResults(jId);
+        }
+        return;
+      }
+
+      if (isTerminalError) {
+        isLiveStreamingRef.current = false;
+        setWsConnected(false);
+        setJobStatusText(`Error on Job #${jobId}: ${msg.message || payload?.message || 'Processing failed'}`);
+        setPipelineStage('ERROR');
+        return;
+      }
+
       // Multi-Domain Envelope handling for Examination Intelligence
       const envelopeModule = msg.analysis_module || payload?.analysis_module;
-      if (envelopeModule === 'examination' || activeModule === 'examination') {
+      const isExamMsg = envelopeModule === 'examination' || payload?.persons !== undefined;
+      const isTrafficMsg = type === 'frame_result' && payload?.tracks !== undefined;
+
+      // Strict Domain Validation Guard: Drop mismatched frames immediately
+      if (activeModuleRef.current === 'examination' && !isExamMsg) {
+        return; // Drop traffic frames when examination domain is active
+      }
+      if (activeModuleRef.current === 'traffic' && isExamMsg) {
+        return; // Drop examination frames when traffic domain is active
+      }
+
+      if (isExamMsg) {
         if (msg.result_type === 'frame_observation' || payload?.persons !== undefined) {
           const frameIdx: number = msg.frame_index ?? payload?.frame_index ?? -1;
           if (frameIdx >= 0 && frameIdx <= lastRenderedFrameIdRef.current) return;
@@ -1304,7 +1361,7 @@ export const WorkbenchView: React.FC = () => {
       // ---------------------------------------------------------------------
       // REAL Bounding Box Rendering — Frame Sync Contract (Smooth Multi-Frame Matching)
       // ---------------------------------------------------------------------
-      const findDets = (f: number, map: Map<number, any[]>, tol: number = 4) => {
+      const findDets = (f: number, map: Map<number, any[]>, tol: number = (activeModule === 'examination' ? 15 : 4)) => {
         if (map.has(f)) return map.get(f);
         for (let i = 1; i <= tol; i++) {
           if (map.has(f - i)) return map.get(f - i);
@@ -1313,7 +1370,7 @@ export const WorkbenchView: React.FC = () => {
         return undefined;
       };
 
-      const getInterpolatedDets = (exactFrame: number, map: Map<number, any[]>, tol: number = 4) => {
+      const getInterpolatedDets = (exactFrame: number, map: Map<number, any[]>, tol: number = (activeModule === 'examination' ? 15 : 4)) => {
         const f0 = Math.floor(exactFrame);
         const f1 = Math.ceil(exactFrame);
         const alpha = exactFrame - f0;
@@ -1322,7 +1379,7 @@ export const WorkbenchView: React.FC = () => {
         if (!baseDets || baseDets.length === 0) return baseDets;
         if (alpha < 0.001 || f0 === f1) return baseDets;
 
-        const nextDets = map.get(f1);
+        const nextDets = map.get(f1) || findDets(f1, map, tol);
         if (!nextDets || nextDets.length === 0) return baseDets;
 
         const nextMap = new Map<number, any>();
@@ -1343,7 +1400,7 @@ export const WorkbenchView: React.FC = () => {
 
       let currentFrameDets: any[] | undefined;
       if (isLiveStreamingRef.current || frameMapRef.current.size === 0) {
-        currentFrameDets = findDets(currentVidFrame, rtFrameBufferRef.current, 5);
+        currentFrameDets = findDets(currentVidFrame, rtFrameBufferRef.current, activeModule === 'examination' ? 15 : 5);
 
         if (!currentFrameDets && latestInferenceFrame !== null && latestInferenceFrame !== undefined) {
           const allKeys = Array.from(rtFrameBufferRef.current.keys());
@@ -1357,12 +1414,21 @@ export const WorkbenchView: React.FC = () => {
         }
       }
       if (!currentFrameDets && frameMapRef.current.size > 0) {
-        currentFrameDets = getInterpolatedDets(currentVidTime * videoFps, frameMapRef.current, 5);
+        currentFrameDets = getInterpolatedDets(currentVidTime * videoFps, frameMapRef.current, activeModule === 'examination' ? 15 : 5);
       }
 
       if (currentFrameDets && currentFrameDets.length > 0) {
+        // Enforce strict domain isolation on visual detections to prevent label leak
+        const domainCompatible = currentFrameDets.filter(d => {
+          if (activeModule === 'examination') {
+            return d.entity_type === 'person' || d.entity_type?.startsWith('object') || ['cell phone', 'book', 'person', 'UNCERTAIN_ELECTRONIC_DEVICE'].includes(d.entity_type);
+          } else {
+            return d.vehicle_class !== undefined || (!d.entity_type || d.entity_type === 'vehicle');
+          }
+        });
+
         // --- 1. Filter tracks per user controls while strictly preserving selected track ---
-        let visibleDets = currentFrameDets;
+        let visibleDets = domainCompatible;
         if (focusSelected && selTrack !== null) {
           visibleDets = visibleDets.filter(d => d.track_id === selTrack);
         } else {
@@ -1372,7 +1438,7 @@ export const WorkbenchView: React.FC = () => {
             }
           }
           if (minConfidence > 0) {
-            const effectiveMinConf = activeModule === 'examination' ? Math.min(minConfidence, 0.18) : minConfidence;
+            const effectiveMinConf = activeModule === 'examination' ? Math.min(minConfidence, 0.14) : minConfidence;
             visibleDets = visibleDets.filter(d => d.track_id === selTrack || (d.confidence ?? 0.9) >= effectiveMinConf);
           }
         }
@@ -1622,47 +1688,69 @@ export const WorkbenchView: React.FC = () => {
         });
 
         // --- 5. Selected / Hovered Floating Object HUD Card ---
-        const activeInspectorId = hoveredTrack ?? selTrack;
+        const activeInspectorId = hoveredTrack ?? (activeModule === 'examination' ? selectedPersonId : selTrack);
         if (activeInspectorId !== null) {
           const inspectedDet = currentFrameDets.find(d => d.track_id === activeInspectorId);
           if (inspectedDet) {
             const cardX = 12;
             const cardY = H - 54;
-            const cardW = 340;
+            const cardW = 360;
             const cardH = 44;
             cx.fillStyle = 'rgba(15, 23, 42, 0.92)';
-            cx.strokeStyle = hoveredTrack === activeInspectorId ? '#38BDF8' : '#F59E0B';
+            cx.strokeStyle = hoveredTrack === activeInspectorId ? '#38BDF8' : (activeModule === 'examination' ? '#6366F1' : '#F59E0B');
             cx.lineWidth = 1.5;
             cx.beginPath();
             if ((cx as any).roundRect) (cx as any).roundRect(cardX, cardY, cardW, cardH, 6);
             else cx.rect(cardX, cardY, cardW, cardH);
             cx.fill(); cx.stroke();
 
-            const cls = (inspectedDet.vehicle_class || 'Vehicle').toUpperCase();
-            const spdText = (inspectedDet.speedKmh && inspectedDet.speedKmh > 0)
-              ? `${Math.round(inspectedDet.speedKmh)} km/h`
-              : inspectedDet.measurementState === 'UNCALIBRATED_MOTION'
-                ? 'Uncalibrated motion'
-                : 'Calibration required';
-            const stateColor = (inspectedDet.speedKmh && inspectedDet.speedKmh > 0)
-              ? '#10B981'
-              : inspectedDet.measurementState === 'UNCALIBRATED_MOTION'
-                ? '#0EA5E9'
-                : '#F59E0B';
+            if (activeModule === 'examination') {
+              const role = (inspectedDet.assigned_role || inspectedDet.entity_type || 'PERSON').toUpperCase();
+              const zone = inspectedDet.assigned_zone || 'UNASSIGNED';
+              const activeEvt = examEvents.find(e => e.person_track_id === inspectedDet.track_id && e.review_status !== 'REJECTED');
+              const statusText = activeEvt ? `${activeEvt.priority}: ${activeEvt.event_type}` : `Zone: ${zone}`;
+              const statusColor = activeEvt ? (activeEvt.priority === 'RED' ? '#EF4444' : '#F59E0B') : '#10B981';
 
-            cx.font = 'bold 11px sans-serif';
-            cx.fillStyle = hoveredTrack === activeInspectorId ? '#38BDF8' : '#F59E0B';
-            cx.textAlign = 'left';
-            cx.fillText(`TRACK #${activeInspectorId} [${cls}]`, cardX + 10, cardY + 17);
+              cx.font = 'bold 11px sans-serif';
+              cx.fillStyle = hoveredTrack === activeInspectorId ? '#38BDF8' : '#818CF8';
+              cx.textAlign = 'left';
+              cx.fillText(`PERSON #${activeInspectorId} [${role}]`, cardX + 10, cardY + 17);
 
-            cx.font = '10px monospace, sans-serif';
-            cx.fillStyle = '#94A3B8';
-            cx.fillText(`Box: [${Math.round(inspectedDet.rx)}, ${Math.round(inspectedDet.ry)}, ${Math.round(inspectedDet.rw)}x${Math.round(inspectedDet.rh)}] · Conf: ${Math.round((inspectedDet.confidence || 0.9) * 100)}%`, cardX + 10, cardY + 34);
+              cx.font = '10px monospace, sans-serif';
+              cx.fillStyle = '#94A3B8';
+              cx.fillText(`Box: [${Math.round(inspectedDet.rx)}, ${Math.round(inspectedDet.ry)}, ${Math.round(inspectedDet.rw)}x${Math.round(inspectedDet.rh)}] · Conf: ${Math.round((inspectedDet.confidence || 0.9) * 100)}%`, cardX + 10, cardY + 34);
 
-            cx.font = 'bold 11px sans-serif';
-            cx.fillStyle = stateColor;
-            cx.textAlign = 'right';
-            cx.fillText(spdText, cardX + cardW - 10, cardY + 22);
+              cx.font = 'bold 11px sans-serif';
+              cx.fillStyle = statusColor;
+              cx.textAlign = 'right';
+              cx.fillText(statusText, cardX + cardW - 10, cardY + 22);
+            } else {
+              const cls = (inspectedDet.vehicle_class || 'Vehicle').toUpperCase();
+              const spdText = (inspectedDet.speedKmh && inspectedDet.speedKmh > 0)
+                ? `${Math.round(inspectedDet.speedKmh)} km/h`
+                : inspectedDet.measurementState === 'UNCALIBRATED_MOTION'
+                  ? 'Uncalibrated motion'
+                  : 'Calibration required';
+              const stateColor = (inspectedDet.speedKmh && inspectedDet.speedKmh > 0)
+                ? '#10B981'
+                : inspectedDet.measurementState === 'UNCALIBRATED_MOTION'
+                  ? '#0EA5E9'
+                  : '#F59E0B';
+
+              cx.font = 'bold 11px sans-serif';
+              cx.fillStyle = hoveredTrack === activeInspectorId ? '#38BDF8' : '#F59E0B';
+              cx.textAlign = 'left';
+              cx.fillText(`TRACK #${activeInspectorId} [${cls}]`, cardX + 10, cardY + 17);
+
+              cx.font = '10px monospace, sans-serif';
+              cx.fillStyle = '#94A3B8';
+              cx.fillText(`Box: [${Math.round(inspectedDet.rx)}, ${Math.round(inspectedDet.ry)}, ${Math.round(inspectedDet.rw)}x${Math.round(inspectedDet.rh)}] · Conf: ${Math.round((inspectedDet.confidence || 0.9) * 100)}%`, cardX + 10, cardY + 34);
+
+              cx.font = 'bold 11px sans-serif';
+              cx.fillStyle = stateColor;
+              cx.textAlign = 'right';
+              cx.fillText(spdText, cardX + cardW - 10, cardY + 22);
+            }
           }
         }
       }
@@ -1684,15 +1772,30 @@ export const WorkbenchView: React.FC = () => {
       }
 
     } else if (isRealVideoRef.current) {
-      // Real video mode but video player loading
+      // Real video mode but video player loading or playback failed
       cx.fillStyle = '#0F172A';
       cx.fillRect(0, 0, W, H);
-      cx.fillStyle = '#4F46E5';
-      cx.font = 'bold 18px sans-serif';
-      cx.textAlign = 'center';
-      cx.fillText('Loading Real Traffic Video...', W / 2, H / 2 - 10);
-      cx.fillStyle = '#64748B'; cx.font = '12px sans-serif';
-      cx.fillText('Select or upload a real video file to begin YOLOX + ByteTrack analysis', W / 2, H / 2 + 18);
+      if (playbackError) {
+        cx.fillStyle = '#EF4444';
+        cx.font = 'bold 16px sans-serif';
+        cx.textAlign = 'center';
+        cx.fillText('⚠️ Video Playback Error', W / 2, H / 2 - 12);
+        cx.fillStyle = '#94A3B8'; cx.font = '12px sans-serif';
+        cx.fillText(playbackError, W / 2, H / 2 + 12);
+        cx.fillStyle = '#64748B'; cx.font = '11px sans-serif';
+        cx.fillText('Backend AI processing may still be running or completed independently.', W / 2, H / 2 + 32);
+      } else {
+        const titleText = activeModule === 'examination' ? 'Loading Classroom Examination Video...' : 'Loading Real Traffic Video...';
+        const subtitleText = activeModule === 'examination'
+          ? 'Preparing high-resolution video stream for examination intelligence...'
+          : 'Select or upload a real video file to begin YOLOX + ByteTrack analysis';
+        cx.fillStyle = activeModule === 'examination' ? '#6366F1' : '#4F46E5';
+        cx.font = 'bold 16px sans-serif';
+        cx.textAlign = 'center';
+        cx.fillText(titleText, W / 2, H / 2 - 10);
+        cx.fillStyle = '#64748B'; cx.font = '12px sans-serif';
+        cx.fillText(subtitleText, W / 2, H / 2 + 18);
+      }
 
     } else {
       // =====================================================================
@@ -1751,12 +1854,26 @@ export const WorkbenchView: React.FC = () => {
 
   const startJobForModule = useCallback(async (videoId: number, chosenModule: AnalysisModule, preserveBanner: boolean = false) => {
     setActiveModule(chosenModule);
+    activeModuleRef.current = chosenModule;
+    setDomain(chosenModule);
     if (!preserveBanner) setSceneRec(null);
     setPipelineStage('JOB_CREATED');
     setJobStatusText(`Initializing ${chosenModule.toUpperCase()} Intelligence Pipeline...`);
 
+    // Strict state isolation: wipe canvas buffers and track selections
+    rtFrameBufferRef.current.clear();
+    frameMapRef.current.clear();
+    seenRef.current.clear();
+    setSelTrack(null);
+    setSelectedPersonId(null);
+    lastRenderedFrameIdRef.current = -1;
+
     let assignedCalib: any = null;
     if (chosenModule === 'traffic') {
+      setExamTracks([]);
+      setExamEvents([]);
+      setExamZones([]);
+      setPrimaryExamFinding(null);
       try {
         const calibRes = await fetch(apiUrl(`/api/v1/videos/${videoId}/calibrations`));
         if (calibRes.ok) {
@@ -1766,10 +1883,10 @@ export const WorkbenchView: React.FC = () => {
       } catch (ce) {
         console.warn('Calibration query error:', ce);
       }
-    }
-    setRealCalib(assignedCalib);
-
-    if (chosenModule === 'examination') {
+    } else {
+      setRealTracks([]);
+      setViolations([]);
+      assignedCalib = null;
       try {
         const zonesRes = await fetch(apiUrl(`/api/v1/videos/${videoId}/examination/zones`));
         if (zonesRes.ok) {
@@ -1780,14 +1897,16 @@ export const WorkbenchView: React.FC = () => {
         console.warn('Zones query error:', ze);
       }
     }
+    setRealCalib(assignedCalib);
 
     try {
       const jobRes = await fetch(apiUrl(`/api/v1/videos/${videoId}/jobs`), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          calibration_id: assignedCalib ? assignedCalib.id : null,
-          config_json: { module: chosenModule, processing_mode: processingMode }
+          calibration_id: chosenModule === 'traffic' && assignedCalib ? assignedCalib.id : null,
+          domain: chosenModule,
+          config_json: { domain: chosenModule, module: chosenModule, processing_mode: processingMode }
         })
       });
       if (!jobRes.ok) throw new Error(`Job creation failed: ${jobRes.status}`);
@@ -1796,6 +1915,7 @@ export const WorkbenchView: React.FC = () => {
 
       setActiveJobId(jobId);
       activeJobIdRef.current = jobId;
+      selectSharedJob(jobId);
       setPipelineStage('JOB_CREATED');
       setJobStatusText(`Job #${jobId} [${chosenModule.toUpperCase()}] running — connecting real-time stream...`);
 
@@ -1805,7 +1925,77 @@ export const WorkbenchView: React.FC = () => {
       setJobStatusText(`Error: ${err.message}`);
       setPipelineStage('ERROR');
     }
-  }, [connectWebSocket]);
+  }, [connectWebSocket, processingMode, selectSharedJob, setDomain]);
+
+  const handleDomainSwitch = useCallback(async (targetModule: AnalysisModule) => {
+    setActiveModule(targetModule);
+    activeModuleRef.current = targetModule;
+    setDomain(targetModule);
+
+    // Purge all frame buffers and detections immediately to prevent cross-contamination
+    rtFrameBufferRef.current.clear();
+    frameMapRef.current.clear();
+    seenRef.current.clear();
+    setSelTrack(null);
+    setSelectedPersonId(null);
+    lastRenderedFrameIdRef.current = -1;
+
+    if (targetModule === 'examination') {
+      setRealTracks([]);
+      setViolations([]);
+      setRealCalib(null);
+    } else {
+      setExamTracks([]);
+      setExamEvents([]);
+      setExamZones([]);
+      setPrimaryExamFinding(null);
+    }
+
+    const currentVideoId = activeVideoId || telemetry?.video_id;
+    try {
+      const res = await fetch(apiUrl('/api/v1/jobs?status=SUCCEEDED'));
+      if (res.ok) {
+        const jobs = await res.json();
+        let matching = null;
+        if (currentVideoId) {
+          matching = jobs.find((j: any) => {
+            const jDomain = (j.domain || (j.config_json || {}).domain || (j.config_json || {}).module || '').toLowerCase();
+            return j.video_id === currentVideoId && (targetModule === 'examination' ? jDomain.includes('exam') : !jDomain.includes('exam'));
+          });
+        }
+        if (!matching) {
+          // If no matching job for this specific video, find latest succeeded job in target domain
+          matching = jobs.find((j: any) => {
+            const jDomain = (j.domain || (j.config_json || {}).domain || (j.config_json || {}).module || '').toLowerCase();
+            return targetModule === 'examination' ? jDomain.includes('exam') : !jDomain.includes('exam');
+          });
+        }
+
+        if (matching) {
+          setActiveJobId(matching.id);
+          activeJobIdRef.current = matching.id;
+          if (matching.video_id) {
+            setActiveVideoId(matching.video_id);
+            const streamUrl = apiUrl(`/api/v1/videos/${matching.video_id}/stream`);
+            setVideoSrc(streamUrl);
+            if (videoRef.current) {
+              videoRef.current.src = streamUrl;
+              videoRef.current.load();
+              videoRef.current.play().catch(() => {});
+            }
+          }
+          selectSharedJob(matching.id);
+          loadJobResults(matching.id);
+        } else {
+          setActiveJobId(null);
+          activeJobIdRef.current = null;
+          setJobStatusText(`Switched to ${targetModule.toUpperCase()} domain. Select or upload a video to analyze.`);
+        }
+      }
+    } catch (err) {
+      console.warn('Job lookup error on domain switch:', err);
+    }
+  }, [activeVideoId, telemetry, loadJobResults, selectSharedJob, setDomain]);
 
   const handleReviewEvent = async (eventId: string, status: 'ACCEPTED' | 'REJECTED', notes: string) => {
     try {
@@ -1866,7 +2056,9 @@ export const WorkbenchView: React.FC = () => {
   // =========================================================================
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file) return;
+    if (!file || isUploading) return;
+    setIsUploading(true);
+    setPlaybackError(null);
 
     uploadStartRef.current = performance.now();
     firstBoxRenderedRef.current = false;
@@ -1921,17 +2113,24 @@ export const WorkbenchView: React.FC = () => {
       const vidRes = await fetch(apiUrl('/api/v1/projects/1/videos'), { method: 'POST', body: formData });
       if (!vidRes.ok) throw new Error(`Upload failed: ${vidRes.status}`);
       const vidData = await vidRes.json();
+      setActiveVideoId(vidData.id);
       setPipelineStage('UPLOAD_COMPLETE');
       setJobStatusText('Video uploaded — Analyzing scene category with Scene Router...');
       setIsClassifying(true);
 
       // Authoritative extracted video metadata from backend
       setTelemetry({
+        video_id: vidData.id,
         source_width: vidData.width || 1920,
         source_height: vidData.height || 1080,
         video_fps: vidData.fps || 29.97,
         video_duration_sec: vidData.duration_sec || 0.0
       });
+
+      // Quick keyword heuristics on filename
+      const lowerName = file.name.toLowerCase();
+      const isExamByName = lowerName.includes('exam') || lowerName.includes('cheat') || lowerName.includes('student') || lowerName.includes('classroom') || lowerName.includes('hall') || lowerName.includes('test');
+      const isTrafficByName = lowerName.includes('traffic') || lowerName.includes('highway') || lowerName.includes('car') || lowerName.includes('road') || lowerName.includes('speed') || lowerName.includes('synthetic');
 
       // Call Scene Router
       let rec: any = null;
@@ -1944,20 +2143,60 @@ export const WorkbenchView: React.FC = () => {
             video_id: vidData.id,
             video_name: file.name
           });
-          setJobStatusText(`Scene estimated: ${rec.scene_type} (${Math.round(rec.confidence * 100)}%) — Auto-running ${rec.recommended_module.toUpperCase()} pipeline...`);
         }
       } catch (ce) {
         console.warn('Scene classification query error:', ce);
       }
       setIsClassifying(false);
 
-      const targetModule: AnalysisModule = rec?.recommended_module || 'traffic';
-      startJobForModule(vidData.id, targetModule, true);
+      // STRICT DOMAIN ISOLATION & PIPELINE ROUTING RESOLUTION
+      const targetDomain = activeDomain || activeModuleRef.current;
+      // Priority 1: User explicitly pre-selected 'examination' prior to upload
+      if (targetDomain === 'examination') {
+        setJobStatusText(`Examination Intelligence active — Initializing Examination Pipeline...`);
+        startJobForModule(vidData.id, 'examination', true);
+        return;
+      }
+
+      // Priority 2: Filename unambiguously indicates examination
+      if (isExamByName) {
+        setJobStatusText(`Examination video detected (${file.name}) — Initializing Examination Pipeline...`);
+        startJobForModule(vidData.id, 'examination', true);
+        return;
+      }
+
+      // Priority 3: Scene router classifies as CLASSROOM_EXAMINATION
+      if (rec?.scene_type === 'CLASSROOM_EXAMINATION') {
+        setJobStatusText(`Classroom scene detected (${Math.round((rec.confidence || 0) * 100)}%) — Running Examination Pipeline...`);
+        startJobForModule(vidData.id, 'examination', true);
+        return;
+      }
+
+      // Priority 4: Filename unambiguously indicates traffic
+      if (isTrafficByName) {
+        setJobStatusText(`Traffic video detected (${file.name}) — Initializing Traffic Pipeline...`);
+        startJobForModule(vidData.id, 'traffic', true);
+        return;
+      }
+
+      // Priority 5: Confident traffic scene classification
+      if (rec?.scene_type === 'TRAFFIC' && (rec?.confidence || 0) >= 0.50) {
+        setJobStatusText(`Traffic scene detected (${Math.round(rec.confidence * 100)}%) — Auto-running Traffic Pipeline...`);
+        startJobForModule(vidData.id, 'traffic', true);
+        return;
+      }
+
+      // Priority 6: Fallback for ambiguous scene -> route to current targetDomain
+      const fallbackDomain = targetDomain || 'traffic';
+      setJobStatusText(`Scene routing (${Math.round((rec?.confidence || 0) * 100)}%) — Running ${fallbackDomain.toUpperCase()} Pipeline...`);
+      startJobForModule(vidData.id, fallbackDomain, true);
 
     } catch (err: any) {
       console.error('Upload/job error:', err);
       setJobStatusText(`Error: ${err.message}`);
       setPipelineStage('ERROR');
+    } finally {
+      setIsUploading(false);
     }
   };
 
@@ -2678,7 +2917,7 @@ export const WorkbenchView: React.FC = () => {
                   cursor: 'pointer',
                   border: 'none'
                 }}
-                onClick={() => setActiveModule('traffic')}
+                onClick={() => handleDomainSwitch('traffic')}
               >
                 🚗 Traffic
               </button>
@@ -2694,7 +2933,7 @@ export const WorkbenchView: React.FC = () => {
                   cursor: 'pointer',
                   border: 'none'
                 }}
-                onClick={() => setActiveModule('examination')}
+                onClick={() => handleDomainSwitch('examination')}
               >
                 🎓 Examination
               </button>
@@ -2759,6 +2998,12 @@ export const WorkbenchView: React.FC = () => {
             preload="auto"
             onPlay={() => setPlaying(true)}
             onPause={() => { if (!isLiveStreamingRef.current) setPlaying(false); }}
+            onError={() => {
+              const err = videoRef.current?.error;
+              const errorText = err ? `Media error ${err.code}: ${err.message || 'Video stream decode failed in browser'}` : 'Video playback failed';
+              console.warn('Video playback error:', errorText);
+              setPlaybackError(errorText);
+            }}
             onEnded={() => {
               if (videoRef.current?.loop) {
                 videoRef.current.currentTime = 0;
@@ -3030,24 +3275,61 @@ export const WorkbenchView: React.FC = () => {
                 <option value="forensic">🔬 Deep Forensic (Dense 1:1)</option>
               </select>
             </div>
-            <button
-              className="b g"
-              onClick={handleSaveWorkbenchCalibration}
-              style={{
-                background: realCalib ? '#065F46' : '#2563EB',
-                color: '#FFF',
-                padding: '4px 10px',
-                fontSize: '11px',
-                fontWeight: 700,
-                border: 'none',
-                borderRadius: '4px',
-                cursor: 'pointer'
-              }}
-              title="Apply road geometry homography calibration for metric speed estimation"
-            >
-              📐 {realCalib ? `Road Calibrated (#${realCalib.id || 'Active'})` : 'Calibrate Road (Homography)'}
-            </button>
-            <label>Upload MP4/WebM{' '}<input type="file" accept="video/mp4,video/webm" onChange={handleFileUpload} /></label>
+            {activeModule === 'traffic' && (
+              <button
+                className="b g"
+                onClick={handleSaveWorkbenchCalibration}
+                style={{
+                  background: realCalib ? '#065F46' : '#2563EB',
+                  color: '#FFF',
+                  padding: '4px 10px',
+                  fontSize: '11px',
+                  fontWeight: 700,
+                  border: 'none',
+                  borderRadius: '4px',
+                  cursor: 'pointer'
+                }}
+                title="Apply road geometry homography calibration for metric speed estimation"
+              >
+                📐 {realCalib ? `Road Calibrated (#${realCalib.id || 'Active'})` : 'Calibrate Road (Homography)'}
+              </button>
+            )}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '4px', background: '#F1F5F9', padding: '2px 8px', borderRadius: '4px', border: '1px solid #CBD5E1' }}>
+              <span style={{ fontSize: '11px', color: '#475569', fontWeight: 700 }}>Upload Target:</span>
+              <button
+                type="button"
+                onClick={() => handleDomainSwitch('traffic')}
+                style={{
+                  background: activeModule === 'traffic' ? '#2563EB' : 'transparent',
+                  color: activeModule === 'traffic' ? '#FFF' : '#64748B',
+                  border: 'none',
+                  borderRadius: '3px',
+                  padding: '2px 6px',
+                  fontSize: '10px',
+                  fontWeight: 700,
+                  cursor: 'pointer'
+                }}
+              >
+                🚗 Traffic
+              </button>
+              <button
+                type="button"
+                onClick={() => handleDomainSwitch('examination')}
+                style={{
+                  background: activeModule === 'examination' ? '#4F46E5' : 'transparent',
+                  color: activeModule === 'examination' ? '#FFF' : '#64748B',
+                  border: 'none',
+                  borderRadius: '3px',
+                  padding: '2px 6px',
+                  fontSize: '10px',
+                  fontWeight: 700,
+                  cursor: 'pointer'
+                }}
+              >
+                🎓 Examination
+              </button>
+            </div>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer' }}>Upload MP4/WebM{' '}<input type="file" accept="video/mp4,video/webm" onChange={handleFileUpload} /></label>
           </div>
 
           <div style={{ display: 'flex', gap: '16px', fontSize: '11px', color: '#64748B', marginTop: '8px', paddingTop: '6px', borderTop: '1px solid #E2E8F0', flexWrap: 'wrap' }}>

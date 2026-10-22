@@ -15,6 +15,24 @@ def create_tables():
             if "telemetry_json" not in cols:
                 conn.execute(text("ALTER TABLE processing_jobs ADD COLUMN telemetry_json JSON"))
                 conn.commit()
+            if "domain" not in cols:
+                conn.execute(text("ALTER TABLE processing_jobs ADD COLUMN domain VARCHAR(32) DEFAULT 'traffic'"))
+                conn.commit()
+
+            # Backfill existing jobs to ensure accurate domain isolation
+            conn.execute(text("""
+                UPDATE processing_jobs 
+                SET domain = 'examination' 
+                WHERE (domain IS NULL OR domain = '' OR domain = 'traffic')
+                AND (
+                    config_json LIKE '%"module": "examination"%'
+                    OR config_json LIKE '%"module":"examination"%'
+                    OR config_json LIKE '%"domain": "examination"%'
+                    OR config_json LIKE '%"domain":"examination"%'
+                )
+            """))
+            conn.execute(text("UPDATE processing_jobs SET domain = 'traffic' WHERE domain IS NULL OR domain = ''"))
+            conn.commit()
     except Exception as e:
         print(f"Migration note: {e}")
     print("VisionRadar Database tables created successfully.")

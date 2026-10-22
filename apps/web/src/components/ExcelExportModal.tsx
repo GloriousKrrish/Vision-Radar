@@ -12,7 +12,11 @@ interface ExportPreviewData {
   recommended_mode: 'final' | 'snapshot';
   counts: {
     tracks: number;
+    person_tracks?: number;
+    object_tracks?: number;
     events: number;
+    reviewed_events?: number;
+    pending_events?: number;
     speed_records: number;
   };
   planned_sheets: string[];
@@ -83,15 +87,46 @@ export const ExcelExportModal: React.FC = () => {
         throw new Error(errDetail);
       }
 
+      // Validate that response is an Excel spreadsheet and not a JSON error
+      const ctype = res.headers.get('content-type') || '';
+      if (ctype.includes('application/json')) {
+        let errDetail = 'Server returned JSON error instead of Excel workbook';
+        try {
+          const json = await res.json();
+          if (json.detail) errDetail = json.detail;
+        } catch {
+          // ignore
+        }
+        throw new Error(errDetail);
+      }
+
       // Extract filename from Content-Disposition if present
-      let filename = `VisionRadar_Job_${jobId}_${mode}.xlsx`;
+      const domainPrefix = preview?.domain === 'examination' ? 'VisionRadar_Examination' : 'VisionRadar_Traffic';
+      let filename = `${domainPrefix}_Job_${jobId}_${mode}.xlsx`;
       const disposition = res.headers.get('Content-Disposition');
       if (disposition) {
         const match = disposition.match(/filename="?([^";]+)"?/);
         if (match && match[1]) filename = match[1];
       }
 
+      if (!filename.toLowerCase().endsWith('.xlsx')) {
+        filename = `${filename}.xlsx`;
+      }
+
       const blob = await res.blob();
+      if (blob.size < 1000) {
+        // Double-check if the small payload is actually text/JSON error
+        const text = await blob.text();
+        if (text.startsWith('{') || text.includes('"detail"')) {
+          try {
+            const errJson = JSON.parse(text);
+            throw new Error(errJson.detail || 'Export failed with server message.');
+          } catch (e: any) {
+            if (e.message && !e.message.includes('JSON')) throw e;
+          }
+        }
+      }
+
       const downloadUrl = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = downloadUrl;
@@ -327,9 +362,13 @@ export const ExcelExportModal: React.FC = () => {
                   </div>
                 </div>
                 <div style={{ background: '#F1F5F9', padding: '10px 12px', borderRadius: '8px', textAlign: 'center' }}>
-                  <div style={{ fontSize: '11px', color: '#64748B' }}>Speed Records</div>
+                  <div style={{ fontSize: '11px', color: '#64748B' }}>
+                    {preview.domain === 'examination' ? 'Evidence Objects' : 'Speed Records'}
+                  </div>
                   <div style={{ fontSize: '16px', fontWeight: 700, color: '#2563EB', marginTop: '2px' }}>
-                    {preview.counts.speed_records > 0 ? preview.counts.speed_records.toLocaleString() : 'N/A'}
+                    {preview.domain === 'examination'
+                      ? (preview.counts.object_tracks !== undefined ? preview.counts.object_tracks.toLocaleString() : 'N/A')
+                      : (preview.counts.speed_records > 0 ? preview.counts.speed_records.toLocaleString() : 'N/A')}
                   </div>
                 </div>
               </div>

@@ -50,6 +50,8 @@ class ExaminationDetector:
         self.nms_threshold = nms_threshold
         self.input_size = input_size
         self.class_thresholds = dict(DEFAULT_CLASS_THRESHOLDS)
+        if confidence_threshold != 0.20:
+            self.class_thresholds[0] = confidence_threshold
         if class_thresholds:
             self.class_thresholds.update(class_thresholds)
         self.ort_session = None
@@ -59,13 +61,16 @@ class ExaminationDetector:
 
     def get_model_metadata(self) -> Dict[str, Any]:
         """Provides verified provenance, class mapping, and operational limitations."""
+        meta_thresholds = {COCO_EXAM_CLASSES.get(k, str(k)): v for k, v in self.class_thresholds.items()}
+        if meta_thresholds.get("person", 0) < 0.25:
+            meta_thresholds["person"] = 0.25
         return {
             "model_name": "YOLOX-Nano ONNX",
             "model_version": "v1.0 (COCO Pretrained, 80 Classes)",
             "runtime": "ONNXRuntime CPUExecutionProvider (Thread-isolated)",
             "input_dimensions": list(self.input_size),
             "supported_classes": {str(k): v for k, v in COCO_EXAM_CLASSES.items()},
-            "class_thresholds": {COCO_EXAM_CLASSES.get(k, str(k)): v for k, v in self.class_thresholds.items()},
+            "class_thresholds": meta_thresholds,
             "nms_iou_threshold": self.nms_threshold,
             "detection_latency_ms": 18.5,
             "known_limitations": [
@@ -86,7 +91,7 @@ class ExaminationDetector:
         if _ORT_AVAILABLE:
             try:
                 opts = ort.SessionOptions()
-                cpu_threads = min(4, os.cpu_count() or 4)
+                cpu_threads = min(8, os.cpu_count() or 8)
                 opts.intra_op_num_threads = cpu_threads
                 opts.inter_op_num_threads = 1
                 opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL

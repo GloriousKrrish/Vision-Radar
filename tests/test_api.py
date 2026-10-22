@@ -52,7 +52,7 @@ def test_create_project_and_upload_video():
     c_data = res_c.json()
 
     # 5. Start Job
-    res_j = client.post(f"/api/v1/videos/{v_id}/jobs", json={"calibration_id": c_data["id"]})
+    res_j = client.post(f"/api/v1/videos/{v_id}/jobs", json={"calibration_id": c_data["id"], "domain": "traffic"})
     assert res_j.status_code == 200
     j_data = res_j.json()
     assert j_data["status"] in ["QUEUED", "RUNNING", "SUCCEEDED"]

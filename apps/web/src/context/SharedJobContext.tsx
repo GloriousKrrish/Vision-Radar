@@ -11,6 +11,7 @@ export interface ProcessingJobRecord {
   error_message?: string | null;
   telemetry?: any;
   config_json?: any;
+  domain?: 'traffic' | 'examination';
   created_at: string;
   started_at?: string | null;
   completed_at?: string | null;
@@ -20,6 +21,7 @@ export interface SharedJobContextType {
   activeJobId: number | null;
   activeJob: ProcessingJobRecord | null;
   activeDomain: 'traffic' | 'examination';
+  setDomain: (domain: 'traffic' | 'examination') => void;
   isLoadingJob: boolean;
   jobList: ProcessingJobRecord[];
   selectJob: (jobId: number) => Promise<void>;
@@ -43,7 +45,15 @@ export const SharedJobProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   });
 
   const [activeJob, setActiveJob] = useState<ProcessingJobRecord | null>(null);
-  const [activeDomain, setActiveDomain] = useState<'traffic' | 'examination'>('traffic');
+  const [activeDomain, setActiveDomain] = useState<'traffic' | 'examination'>(() => {
+    try {
+      const saved = localStorage.getItem('visionradar_active_domain');
+      if (saved === 'examination' || saved === 'traffic') return saved;
+      return 'traffic';
+    } catch {
+      return 'traffic';
+    }
+  });
   const [isLoadingJob, setIsLoadingJob] = useState<boolean>(false);
   const [jobList, setJobList] = useState<ProcessingJobRecord[]>([]);
 
@@ -83,9 +93,8 @@ export const SharedJobProvider: React.FC<{ children: React.ReactNode }> = ({ chi
           // ignore localStorage error
         }
 
-        const cfg = job.config_json || {};
-        const mod = (cfg.module || '').toLowerCase();
-        setActiveDomain(mod.includes('exam') ? 'examination' : 'traffic');
+        const authDomain = job.domain || ((job.config_json || {}).domain || (job.config_json || {}).module || '').toLowerCase();
+        setActiveDomain(authDomain.includes('exam') ? 'examination' : 'traffic');
       } else {
         console.warn(`[SharedJobContext] Job #${jobId} not found`);
       }
@@ -129,6 +138,38 @@ export const SharedJobProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     return () => clearInterval(interval);
   }, [activeJob]);
 
+  // Change authoritative domain without mutating any existing running jobs
+  const setDomain = useCallback((targetDomain: 'traffic' | 'examination') => {
+    setActiveDomain(targetDomain);
+    try {
+      localStorage.setItem('visionradar_active_domain', targetDomain);
+    } catch {
+      // ignore localStorage error
+    }
+
+    // Determine current active job domain
+    const currentJobDomain = activeJob
+      ? (activeJob.domain || ((activeJob.config_json || {}).domain || (activeJob.config_json || {}).module || '').toLowerCase().includes('exam') ? 'examination' : 'traffic')
+      : null;
+
+    if (currentJobDomain !== targetDomain) {
+      // Find latest job in jobList belonging to the target domain
+      const matchingJob = jobList.find(j => {
+        const d = (j.domain || ((j.config_json || {}).domain || (j.config_json || {}).module || '').toLowerCase());
+        return targetDomain === 'examination' ? d.includes('exam') : !d.includes('exam');
+      });
+      if (matchingJob) {
+        selectJob(matchingJob.id);
+      } else {
+        setActiveJobId(null);
+        setActiveJob(null);
+        try {
+          localStorage.removeItem('visionradar_active_job_id');
+        } catch {}
+      }
+    }
+  }, [activeJob, jobList, selectJob]);
+
   const openExportModal = (jobId?: number) => {
     setExportTargetJobId(jobId || activeJobId);
     setExportModalOpen(true);
@@ -144,6 +185,7 @@ export const SharedJobProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         activeJobId,
         activeJob,
         activeDomain,
+        setDomain,
         isLoadingJob,
         jobList,
         selectJob,

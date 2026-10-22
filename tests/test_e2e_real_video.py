@@ -44,7 +44,7 @@ def test_e2e_real_video_processing_pipeline():
     calib_id = calib_res.json()["id"]
 
     # 4. Trigger Processing Job
-    job_res = client.post(f"/api/v1/videos/{video_id}/jobs", json={"calibration_id": calib_id, "config_json": {"detector": "mog2"}})
+    job_res = client.post(f"/api/v1/videos/{video_id}/jobs", json={"calibration_id": calib_id, "domain": "traffic", "config_json": {"detector": "mog2"}})
     assert job_res.status_code == 200
     job_id = job_res.json()["id"]
 

@@ -61,6 +61,28 @@ def cancel_all_active_jobs():
             _CANCELLED_JOBS.add(jid)
     print(f"[JOB_WORKER] All active jobs marked for cancellation.", flush=True)
 
+def cancel_active_jobs_for_video(video_id: int, exclude_job_id: Optional[int] = None):
+    """Cancel prior active jobs on the specific video to prevent duplicate processing, leaving unrelated jobs intact."""
+    with SessionLocal() as db:
+        query = db.query(ProcessingJob).filter(
+            ProcessingJob.video_id == video_id,
+            ProcessingJob.status.in_(["RUNNING", "QUEUED"])
+        )
+        if exclude_job_id is not None:
+            query = query.filter(ProcessingJob.id != exclude_job_id)
+        prior_jobs = query.all()
+        for pj in prior_jobs:
+            cancel_job(pj.id)
+            pj.status = "CANCELLED"
+            pj.stage = "Cancelled"
+            pj.completed_at = datetime.datetime.now(datetime.timezone.utc)
+            pj.error_message = f"Superseded by new job #{exclude_job_id}" if exclude_job_id else "Superseded by new job"
+            _emit(pj.id, {"type": "error", "job_id": pj.id, "message": pj.error_message})
+            _JOB_COMPLETED_AT[pj.id] = time.time()
+        if prior_jobs:
+            db.commit()
+            print(f"[JOB_WORKER] Cancelled {len(prior_jobs)} prior job(s) specifically on Video #{video_id}.", flush=True)
+
 def is_job_cancelled(job_id: int) -> bool:
     """Check if job has received a cancellation signal."""
     with _JOB_LOCK:
@@ -134,12 +156,21 @@ def log_lifecycle(job_id: int, event: str, frame_index: Optional[int] = None, qu
 
 
 def _safe_put(queue: asyncio.Queue, message: dict):
-    """Safely put message into queue. Never drops terminal messages (completed/error/status)."""
-    is_terminal = message.get("type") in ("completed", "error", "status")
+    """Safely put message into queue. Never drops terminal messages (completed/error/status/job_summary)."""
+    is_terminal = (
+        message.get("type") in ("completed", "error", "status")
+        or message.get("result_type") == "job_summary"
+        or message.get("payload", {}).get("type") in ("completed", "error")
+        or message.get("processing_status") in ("SUCCESS", "FAILED", "CANCELLED")
+    )
     while queue.full():
         try:
             item = queue.get_nowait()
-            if item.get("type") in ("completed", "error"):
+            if (
+                item.get("type") in ("completed", "error")
+                or item.get("result_type") == "job_summary"
+                or item.get("payload", {}).get("type") in ("completed", "error")
+            ):
                 # Avoid dropping previous terminal messages
                 queue.put_nowait(item)
                 break
@@ -193,12 +224,33 @@ def run_job_streaming(job_id: int, loop: asyncio.AbstractEventLoop):
 
     with _JOB_LOCK:
         _ACTIVE_JOBS.add(job_id)
-        _CANCELLED_JOBS.discard(job_id)
 
     db: Session = SessionLocal()
     job = db.query(ProcessingJob).filter(ProcessingJob.id == job_id).first()
     if not job:
         _emit(job_id, {"type": "error", "job_id": job_id, "message": f"Job #{job_id} not found."})
+        with _JOB_LOCK:
+            _ACTIVE_JOBS.discard(job_id)
+        db.close()
+        return
+
+    # Check for early cancellation before initializing pipeline components
+    if job.status == "CANCELLED" or is_job_cancelled(job_id):
+        job.status = "CANCELLED"
+        job.stage = "Cancelled"
+        job.completed_at = datetime.datetime.now(datetime.timezone.utc)
+        job.error_message = job.error_message or "Job cancelled by user or superseded by new job."
+        db.commit()
+        log_lifecycle(job_id, "JOB_CANCELLED", frame_index=0)
+        _emit(job_id, {
+            "type": "error",
+            "job_id": job_id,
+            "message": job.error_message
+        })
+        with _JOB_LOCK:
+            _ACTIVE_JOBS.discard(job_id)
+            _CANCELLED_JOBS.discard(job_id)
+        _JOB_COMPLETED_AT[job_id] = time.time()
         db.close()
         return
 
