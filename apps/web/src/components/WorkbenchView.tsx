@@ -183,9 +183,10 @@ export const WorkbenchView: React.FC = () => {
   const [classFilter, setClassFilter] = useState<'ALL' | 'CAR' | 'BUS' | 'TRUCK' | 'MOTORCYCLE'>('ALL');
   const [minConfidence, setMinConfidence] = useState<number>(0.25);
   const [focusSelected, setFocusSelected] = useState<boolean>(false);
-  const [maxLabels, setMaxLabels] = useState<number>(14);
+  const [maxLabels, setMaxLabels] = useState<number>(28);
   const [hoveredTrack, setHoveredTrack] = useState<number | null>(null);
   const hoveredTrackRef = useRef<number | null>(null);
+  const lastTelemetryUpdateRef = useRef<number>(0);
 
   // --- table pagination ---
   const [tablePage, setTablePage] = useState<number>(1);
@@ -1007,21 +1008,40 @@ export const WorkbenchView: React.FC = () => {
           }
         }
 
-        // Lockstep visual synchronization during live AI inference:
-        // Set video currentTime to matching frameIdx so video frame and bounding boxes align 1:1
-        if (videoRef.current) {
+        // Smooth, non-blocking visual synchronization during live AI inference:
+        // Keep video playing continuously without demuxer-stalling seeks.
+        // Gently adjust playback rate (+/- 15%) to maintain lockstep with live frames.
+        if (videoRef.current && videoRef.current.readyState >= 2) {
           const vFps = telemetry?.video_fps || 29.97;
           const targetSec = frameIdx / vFps;
-          if (!videoRef.current.paused) {
-            videoRef.current.pause();
+          const curTime = videoRef.current.currentTime || 0;
+          const drift = targetSec - curTime;
+
+          if (videoRef.current.paused && playing) {
+            videoRef.current.play().catch(() => {});
           }
-          if (Math.abs((videoRef.current.currentTime || 0) - targetSec) > 0.015) {
+
+          if (Math.abs(drift) > 1.2) {
             videoRef.current.currentTime = targetSec;
+            videoRef.current.playbackRate = 1.0;
+          } else if (drift > 0.15) {
+            videoRef.current.playbackRate = 1.15;
+          } else if (drift < -0.15) {
+            videoRef.current.playbackRate = 0.85;
+          } else {
+            videoRef.current.playbackRate = 1.0;
           }
         }
-        setFrame(frameIdx);
 
-        setLiveTrackCount(tracks.length);
+        // Throttle React state telemetry updates to 4Hz (every 250ms) to avoid virtual DOM thrashing
+        const nowTs = performance.now();
+        if (nowTs - lastTelemetryUpdateRef.current > 250) {
+          lastTelemetryUpdateRef.current = nowTs;
+          setLiveTrackCount(tracks.length);
+          if (payload?.throughput_fps !== undefined) {
+            setProcessingFps(payload.throughput_fps);
+          }
+        }
 
         if (!firstBoxRenderedRef.current && tracks.length > 0 && uploadStartRef.current > 0) {
           firstBoxRenderedRef.current = true;
@@ -1613,31 +1633,38 @@ export const WorkbenchView: React.FC = () => {
               : '#94A3B8';
           }
 
-          // Box interior
-          cx.fillStyle = isSelected ? 'rgba(245, 158, 11, 0.22)' : isHovered ? 'rgba(56, 189, 248, 0.20)' : (col + '20');
+          // Discard background tracks that have drifted above the highway horizon into the sky/trees
+          if (activeModule !== 'examination' && !isSelected && !isHovered && (by + bh * 0.5) < 48) {
+            return;
+          }
+
+          // Sleek, clean box interior
+          cx.fillStyle = isSelected ? 'rgba(245, 158, 11, 0.22)' : isHovered ? 'rgba(56, 189, 248, 0.20)' : (col + '18');
           cx.fillRect(bx, by, bw, bh);
 
-          // Box brackets
-          const bracketLen = Math.min(12, Math.min(bw, bh) * 0.35);
-          cx.strokeStyle = col;
-          cx.lineWidth = (isSelected || isHovered) ? 2.5 : 1.5;
-          cx.beginPath();
-          cx.moveTo(bx, by + bracketLen); cx.lineTo(bx, by); cx.lineTo(bx + bracketLen, by);
-          cx.moveTo(bx + bw - bracketLen, by); cx.lineTo(bx + bw, by); cx.lineTo(bx + bw, by + bracketLen);
-          cx.moveTo(bx + bw, by + bh - bracketLen); cx.lineTo(bx + bw, by + bh); cx.lineTo(bx + bw - bracketLen, by + bh);
-          cx.moveTo(bx + bracketLen, by + bh); cx.lineTo(bx, by + bh); cx.lineTo(bx, by + bh - bracketLen);
-          cx.stroke();
-
           // Subtle box border
-          cx.strokeStyle = col + '33';
-          cx.lineWidth = 1;
+          cx.strokeStyle = (isSelected || isHovered) ? col : (col + '66');
+          cx.lineWidth = (isSelected || isHovered) ? 2.0 : 1.0;
           cx.strokeRect(bx, by, bw, bh);
 
-          // Center target dot
-          cx.fillStyle = col;
-          cx.beginPath();
-          cx.arc(bx + bw / 2, by + bh / 2, (isSelected || isHovered) ? 3 : 2, 0, 2 * Math.PI);
-          cx.fill();
+          // Corner reticles and target dots ONLY for selected, hovered, or in INTELLIGENCE mode
+          if (isSelected || isHovered || vizMode === 'INTELLIGENCE') {
+            const bracketLen = Math.min(10, Math.min(bw, bh) * 0.35);
+            cx.strokeStyle = col;
+            cx.lineWidth = (isSelected || isHovered) ? 2.5 : 1.5;
+            cx.beginPath();
+            cx.moveTo(bx, by + bracketLen); cx.lineTo(bx, by); cx.lineTo(bx + bracketLen, by);
+            cx.moveTo(bx + bw - bracketLen, by); cx.lineTo(bx + bw, by); cx.lineTo(bx + bw, by + bracketLen);
+            cx.moveTo(bx + bw, by + bh - bracketLen); cx.lineTo(bx + bw, by + bh); cx.lineTo(bx + bw - bracketLen, by + bh);
+            cx.moveTo(bx + bracketLen, by + bh); cx.lineTo(bx, by + bh); cx.lineTo(bx, by + bh - bracketLen);
+            cx.stroke();
+
+            // Center target dot
+            cx.fillStyle = col;
+            cx.beginPath();
+            cx.arc(bx + bw / 2, by + bh / 2, (isSelected || isHovered) ? 3 : 2, 0, 2 * Math.PI);
+            cx.fill();
+          }
 
           // --- 4. Intelligent Label Generation & Decluttering ---
           // Rule: Selected or Hovered ALWAYS render detailed label.

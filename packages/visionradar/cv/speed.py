@@ -221,9 +221,11 @@ class MonocularSpeedEstimator:
         Preserves pre-existing world_pos if already assigned.
         """
         for pt in trajectory.points:
-            if pt.world_pos is not None:
-                pt.roi_status = getattr(pt, "roi_status", "VALID")
+            # If already evaluated for ROI and projection, skip re-evaluating to prevent O(N^2) trajectory slowdown
+            if getattr(pt, "_projected", False):
                 continue
+
+            pt._projected = True
 
             if self.calibrator is None:
                 pt.roi_status = "CALIBRATION_REQUIRED"
@@ -398,13 +400,16 @@ class MonocularSpeedEstimator:
         else:
             reg_kmh = inst_kmh
 
-        # 4. Kalman / Smoothed Speed over segment
+        # 4. Kalman / Smoothed Speed over local window (bounded to at most 20 recent points)
         kalman = KalmansSpeedFilter()
         kalman_kmh = inst_kmh
-        for i, p in enumerate(target_segment):
-            dt_k = (p.timestamp - target_segment[i-1].timestamp) if i > 0 else 0.033
-            dist_cum = float(np.hypot(p.world_pos[0] - target_segment[0].world_pos[0],
-                                      p.world_pos[1] - target_segment[0].world_pos[1]))
+        start_k_idx = max(0, t_idx - 20)
+        seg_slice = target_segment[start_k_idx : t_idx + 1]
+        p_base = seg_slice[0]
+        for i, p in enumerate(seg_slice):
+            dt_k = (p.timestamp - seg_slice[i-1].timestamp) if i > 0 else 0.033
+            dist_cum = float(np.hypot(p.world_pos[0] - p_base.world_pos[0],
+                                      p.world_pos[1] - p_base.world_pos[1]))
             _, vel_mps = kalman.update(dist_cum, dt_k)
             if p.frame_index == target_frame_idx:
                 kalman_kmh = abs(vel_mps) * 3.6
@@ -443,7 +448,7 @@ class MonocularSpeedEstimator:
             diag_flag = "SPEED_INVALID"
             inv_reason = "WORLD_POSITION_JUMP"
             validity = "TRAJECTORY_UNRELIABLE"
-        elif disagreement_kmh > 25.0:
+        elif disagreement_kmh > 45.0:
             diag_flag = "SPEED_SUSPICIOUS"
             inv_reason = "ESTIMATOR_DISAGREEMENT"
             validity = "LOW_CONFIDENCE"
@@ -452,7 +457,13 @@ class MonocularSpeedEstimator:
             inv_reason = "TRAJECTORY_UNRELIABLE"
             validity = "LOW_CONFIDENCE"
 
-        primary_speed_kmh = reg_kmh
+        # Prioritize Kalman smoothed or regression speed for superior highway stability
+        if 5.0 <= kalman_kmh <= 180.0:
+            primary_speed_kmh = kalman_kmh
+        elif 5.0 <= reg_kmh <= 180.0:
+            primary_speed_kmh = reg_kmh
+        else:
+            primary_speed_kmh = path_avg_kmh
 
         prov = SpeedProvenance(
             job_id=self.job_id,

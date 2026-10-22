@@ -499,6 +499,11 @@ def run_job_streaming(job_id: int, loop: asyncio.AbstractEventLoop):
                 # Suppress unconfirmed 1-hit tracks after initial frames to eliminate transient false detections / flicker
                 if trk.hits < 2 and trk.detection_count < 2 and frame_idx > 2:
                     continue
+                # Suppress lost or drifting out-of-bounds tracks to eliminate ghost corner brackets
+                if trk.time_since_update > traffic_stride:
+                    continue
+                if hasattr(trk, 'is_out_of_bounds') and trk.is_out_of_bounds(src_w, src_h, horizon_ratio=0.10):
+                    continue
 
                 active_tracks[trk.track_id] = trk
                 speed_estimator.project_trajectory(trk.trajectory, source_width=src_w, source_height=src_h)
@@ -725,10 +730,10 @@ def run_job_streaming(job_id: int, loop: asyncio.AbstractEventLoop):
                         except Exception:
                             pass
 
-                # Intelligence engines
+                # Intelligence engines — pass only last 2 points for crossing checks
                 try:
                     counting_engine.process_track_update(
-                        trk.track_id, trk.vehicle_class, [p.to_dict() for p in trk.trajectory.points]
+                        trk.track_id, trk.vehicle_class, [p.to_dict() for p in trk.trajectory.points[-2:]]
                     )
                 except Exception:
                     pass
@@ -759,26 +764,30 @@ def run_job_streaming(job_id: int, loop: asyncio.AbstractEventLoop):
                                     cand_tuples.append((f_i, full_frame.copy()))
 
                         if cand_tuples:
-                            res = accident_classifier_service.aggregate_candidate_frames(cand_tuples)
-                            ev_dir = f"data/evidence/job_{job.id}/accident_{ev.event_id}"
+                            def _run_candidate_evaluation(e_tuples, e_ev, e_pidx, e_time):
+                                try:
+                                    res = accident_classifier_service.aggregate_candidate_frames(e_tuples)
+                                    ev_dir = f"data/evidence/job_{job.id}/accident_{e_ev.event_id}"
+                                    meta_payload = {
+                                        "job_id": job.id,
+                                        "event_id": e_ev.event_id,
+                                        "frame_index": e_pidx,
+                                        "timestamp": getattr(e_ev, "peak_time", e_time),
+                                        "track_ids": [getattr(e_ev, "track_id", 0)],
+                                        "candidate_reason": getattr(e_ev, "explanation", "Trajectory anomaly candidate"),
+                                        "source_event_ids": [e_ev.event_id],
+                                        "classifier_predictions": res["frame_predictions"],
+                                        "aggregate_score": res["candidate_score"],
+                                        "policy_version": res["policy_version"],
+                                        "final_class": res["final_class"],
+                                        "is_candidate": res["is_candidate"]
+                                    }
+                                    _async_write_candidate_evidence(ev_dir, e_tuples, meta_payload)
+                                    accident_candidates_list.append(meta_payload)
+                                except Exception:
+                                    pass
 
-                            meta_payload = {
-                                "job_id": job.id,
-                                "event_id": ev.event_id,
-                                "frame_index": p_idx,
-                                "timestamp": getattr(ev, "peak_time", timestamp),
-                                "track_ids": [getattr(ev, "track_id", 0)],
-                                "candidate_reason": getattr(ev, "explanation", "Trajectory anomaly candidate"),
-                                "source_event_ids": [ev.event_id],
-                                "classifier_predictions": res["frame_predictions"],
-                                "aggregate_score": res["candidate_score"],
-                                "policy_version": res["policy_version"],
-                                "final_class": res["final_class"],
-                                "is_candidate": res["is_candidate"]
-                            }
-                            # Offload disk writes to thread pool to avoid blocking video processing
-                            _EVIDENCE_IO_EXECUTOR.submit(_async_write_candidate_evidence, ev_dir, cand_tuples, meta_payload)
-                            accident_candidates_list.append(meta_payload)
+                            _EVIDENCE_IO_EXECUTOR.submit(_run_candidate_evaluation, cand_tuples, ev, p_idx, timestamp)
 
                 last_successful_stage = "ANALYTICS"
                 last_stage_ts = time.time()

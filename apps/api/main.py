@@ -230,8 +230,8 @@ async def upload_video(project_id: int, file: UploadFile = File(...), db: Sessio
     # Auto-seed default perspective road calibration so metric speed estimation works immediately
     try:
         from visionradar.cv.calibration import HomographyCalibrator
-        img_pts = [(330.0, 160.0), (470.0, 160.0), (748.0, 435.0), (51.0, 435.0)]
-        world_pts = [(-1.0, 150.0), (13.0, 150.0), (13.0, 0.5), (-1.0, 0.5)]
+        img_pts = [(140.0, 140.0), (660.0, 140.0), (790.0, 445.0), (10.0, 445.0)]
+        world_pts = [(-10.0, 160.0), (25.0, 160.0), (25.0, 0.5), (-10.0, 0.5)]
         auto_calibrator = HomographyCalibrator(image_points=img_pts, world_points=world_pts)
         auto_calib = Calibration(
             video_id=video.id,
@@ -384,8 +384,8 @@ def list_calibrations(video_id: int, db: Session = Depends(get_db)):
         if video:
             try:
                 from visionradar.cv.calibration import HomographyCalibrator
-                img_pts = [(330.0, 160.0), (470.0, 160.0), (748.0, 435.0), (51.0, 435.0)]
-                world_pts = [(-1.0, 150.0), (13.0, 150.0), (13.0, 0.5), (-1.0, 0.5)]
+                img_pts = [(140.0, 140.0), (660.0, 140.0), (790.0, 445.0), (10.0, 445.0)]
+                world_pts = [(-10.0, 160.0), (25.0, 160.0), (25.0, 0.5), (-10.0, 0.5)]
                 auto_calibrator = HomographyCalibrator(image_points=img_pts, world_points=world_pts)
                 auto_calib = Calibration(
                     video_id=video_id,
@@ -481,8 +481,8 @@ async def start_processing_job(video_id: int, payload: JobCreate, background_tas
                 # Auto-seed standard road calibration for traffic video so metric speed estimation works immediately
                 try:
                     from visionradar.cv.calibration import HomographyCalibrator
-                    img_pts = [(330.0, 160.0), (470.0, 160.0), (748.0, 435.0), (51.0, 435.0)]
-                    world_pts = [(-1.0, 150.0), (13.0, 150.0), (13.0, 0.5), (-1.0, 0.5)]
+                    img_pts = [(140.0, 140.0), (660.0, 140.0), (790.0, 445.0), (10.0, 445.0)]
+                    world_pts = [(-10.0, 160.0), (25.0, 160.0), (25.0, 0.5), (-10.0, 0.5)]
                     auto_calibrator = HomographyCalibrator(image_points=img_pts, world_points=world_pts)
                     auto_calib = Calibration(
                         video_id=video_id,

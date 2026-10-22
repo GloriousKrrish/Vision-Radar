@@ -146,8 +146,8 @@ class HomographyCalibrator:
         Y1 = res[1] / denom
         Y2 = res_next[1] / res_next[2]
         delta_y = abs(Y2 - Y1)
-
-        if delta_y > 5.0:
+        # Highway perspective cameras have high compression near the horizon (up to 35 m/px)
+        if delta_y > 35.0:
             return False, "CALIBRATION_UNSTABLE"
 
         return True, "VALID"

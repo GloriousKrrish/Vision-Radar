@@ -160,7 +160,21 @@ class TrackedVehicle:
             else:
                 self.lane = "Lane 3"
 
-        self.trajectory.add_point(TrajectoryPoint(frame_index, timestamp, detection.bbox, confidence=detection.confidence))
+    def is_out_of_bounds(self, img_w: float = 1920.0, img_h: float = 1080.0, horizon_ratio: float = 0.10) -> bool:
+        """
+        Detects if an extrapolated/lost vehicle track has drifted off-screen or into the sky.
+        """
+        x1, y1, x2, y2 = self.bbox
+        # Completely off-screen
+        if x2 < -40.0 or x1 > img_w + 40.0 or y1 > img_h + 40.0:
+            return True
+        # If missing detection and drifting above the top margin
+        if self.time_since_update >= 2 and y2 < 60.0:
+            return True
+        # Degenerate dimension (collapsed box)
+        if (x2 - x1) < 2.0 or (y2 - y1) < 2.0:
+            return True
+        return False
 
     @property
     def duration(self) -> float:
@@ -277,7 +291,7 @@ class ByteTrackTracker(BaseTracker):
     """
     def __init__(
         self,
-        max_age: int = 30,
+        max_age: int = 10,
         iou_threshold: float = 0.3,
         high_threshold: float = 0.40,
         low_threshold: float = 0.10
@@ -424,8 +438,11 @@ class ByteTrackTracker(BaseTracker):
             if dup_id in self.active_tracks:
                 del self.active_tracks[dup_id]
 
-        # Step 7: Purge stale tracks exceeding max_age into recently_lost_tracks
-        stale_ids = [tid for tid, t in self.active_tracks.items() if t.time_since_update > self.max_age]
+        # Step 7: Purge stale tracks exceeding max_age or drifting out-of-bounds into recently_lost_tracks
+        stale_ids = [
+            tid for tid, t in self.active_tracks.items()
+            if t.time_since_update > self.max_age or t.is_out_of_bounds()
+        ]
         for tid in stale_ids:
             stale_trk = self.active_tracks[tid]
             self.recently_lost_tracks[tid] = {
@@ -461,7 +478,7 @@ class ByteTrackTracker(BaseTracker):
             trk.trajectory.add_point(
                 TrajectoryPoint(frame_index, timestamp, predicted_bbox, confidence=trk.confidence)
             )
-            if trk.time_since_update > self.max_age:
+            if trk.time_since_update > self.max_age or trk.is_out_of_bounds():
                 self.recently_lost_tracks[tid] = {
                     "last_bbox": trk.bbox,
                     "last_frame": trk.last_frame,

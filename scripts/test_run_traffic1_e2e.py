@@ -29,6 +29,7 @@ print(f"Calibration response: {r_cal.status_code}, Calibration ID: {calib_id}")
 
 # Start job
 job_payload = {
+    "domain": "traffic",
     "calibration_id": calib_id,
     "config_json": {
         "confidence_threshold": 0.25,
