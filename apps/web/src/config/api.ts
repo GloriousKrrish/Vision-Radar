@@ -2,14 +2,39 @@
  * VisionRadar API & WebSocket Runtime Configuration
  *
  * Automatically resolves endpoint targets:
- * - When VITE_API_URL is configured (e.g., Vercel -> Render backend), requests and
- *   WebSockets route to the deployed Render service.
- * - In local development or unified host mode, paths remain relative to window.location.
+ * - When VITE_API_URL is configured, requests and WebSockets route to that target.
+ * - When running on Vercel (*.vercel.app), automatically targets Render backend:
+ *   https://visionradar-backend.onrender.com (and wss:// for WebSockets).
+ * - Allows runtime override via localStorage key 'visionradar_api_url'.
+ * - In local development, remains relative to window.location (port 8080 -> proxy to 8000).
  */
 
 const metaEnv: Record<string, string | undefined> = (typeof import.meta !== 'undefined' && (import.meta as any).env) || {};
 
-export const API_BASE_URL: string = (metaEnv.VITE_API_URL || '').replace(/\/$/, '');
+function resolveBaseUrl(): string {
+  // 1. Explicit Vite env variable
+  if (metaEnv.VITE_API_URL) {
+    return metaEnv.VITE_API_URL.replace(/\/$/, '');
+  }
+
+  if (typeof window !== 'undefined') {
+    // 2. Local storage override for custom proctor instances
+    const stored = localStorage.getItem('visionradar_api_url');
+    if (stored) {
+      return stored.replace(/\/$/, '');
+    }
+
+    // 3. Automatic Vercel production deployment fallback to Render backend
+    if (window.location.hostname.endsWith('vercel.app')) {
+      return 'https://visionradar-backend.onrender.com';
+    }
+  }
+
+  // 4. Localhost / same-origin relative fallback
+  return '';
+}
+
+export const API_BASE_URL: string = resolveBaseUrl();
 
 export function apiUrl(path: string): string {
   if (!API_BASE_URL) return path;

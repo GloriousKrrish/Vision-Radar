@@ -1,5 +1,14 @@
 {
+  "version": 2,
   "rewrites": [
+    {
+      "source": "/api/:path*",
+      "destination": "https://visionradar-backend.onrender.com/api/:path*"
+    },
+    {
+      "source": "/static/:path*",
+      "destination": "https://visionradar-backend.onrender.com/static/:path*"
+    },
     {
       "source": "/(.*)",
       "destination": "/index.html"
