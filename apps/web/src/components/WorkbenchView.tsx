@@ -367,6 +367,19 @@ export const WorkbenchView: React.FC = () => {
 
         if (activeJobIdRef.current !== null && activeJobIdRef.current !== jobId) return;
 
+        // Ensure calibration is loaded for this traffic job
+        if (jobData?.calibration_id) {
+          fetch(apiUrl(`/api/v1/calibrations/${jobData.calibration_id}`))
+            .then(r => r.ok ? r.json() : null)
+            .then(c => { if (c) setRealCalib(c); })
+            .catch(() => {});
+        } else if (jobData?.video_id) {
+          fetch(apiUrl(`/api/v1/videos/${jobData.video_id}/calibrations`))
+            .then(r => r.ok ? r.json() : null)
+            .then(cList => { if (cList?.length) setRealCalib(cList[0]); })
+            .catch(() => {});
+        }
+
         const trkData = (trkRes && trkRes.ok) ? await trkRes.json() : [];
         const violsData = (violsRes && violsRes.ok) ? await violsRes.json() : [];
 
@@ -812,7 +825,8 @@ export const WorkbenchView: React.FC = () => {
         if (videoRef.current) {
           videoRef.current.playbackRate = 1.0;
           videoRef.current.loop = true;
-          videoRef.current.play().catch(() => {});
+          videoRef.current.currentTime = 0;
+          videoRef.current.play().then(() => setPlaying(true)).catch(() => {});
         }
         setWsConnected(false);
         setPipelineStage('FINALIZING');
@@ -993,11 +1007,19 @@ export const WorkbenchView: React.FC = () => {
           }
         }
 
-        // Phase 22.3: Decoupled Non-Blocking Playback
-        // Maintain smooth 1.0x playback rate without jarring currentTime seeks
-        if (videoRef.current && videoRef.current.readyState > 1) {
-          videoRef.current.playbackRate = 1.0;
+        // Lockstep visual synchronization during live AI inference:
+        // Set video currentTime to matching frameIdx so video frame and bounding boxes align 1:1
+        if (videoRef.current) {
+          const vFps = telemetry?.video_fps || 29.97;
+          const targetSec = frameIdx / vFps;
+          if (!videoRef.current.paused) {
+            videoRef.current.pause();
+          }
+          if (Math.abs((videoRef.current.currentTime || 0) - targetSec) > 0.015) {
+            videoRef.current.currentTime = targetSec;
+          }
         }
+        setFrame(frameIdx);
 
         setLiveTrackCount(tracks.length);
 
@@ -1450,19 +1472,15 @@ export const WorkbenchView: React.FC = () => {
       };
 
       let currentFrameDets: any[] | undefined;
-      if (isLiveStreamingRef.current || frameMapRef.current.size === 0) {
+      if (isLiveStreamingRef.current) {
+        // In live streaming mode, prioritize exact match with latest streamed frame or video frame
+        const targetF = latestInferenceFrame ?? currentVidFrame;
+        currentFrameDets = rtFrameBufferRef.current.get(targetF)
+          || rtFrameBufferRef.current.get(currentVidFrame)
+          || findDets(targetF, rtFrameBufferRef.current, 6)
+          || findDets(currentVidFrame, rtFrameBufferRef.current, 6);
+      } else if (frameMapRef.current.size === 0) {
         currentFrameDets = findDets(currentVidFrame, rtFrameBufferRef.current, activeModule === 'examination' ? 15 : 5);
-
-        if (!currentFrameDets && latestInferenceFrame !== null && latestInferenceFrame !== undefined) {
-          const allKeys = Array.from(rtFrameBufferRef.current.keys());
-          if (allKeys.length > 0) {
-            const closest = allKeys.reduce((prev, curr) => Math.abs(curr - currentVidFrame) < Math.abs(prev - currentVidFrame) ? curr : prev);
-            // Strict bounded temporal matching: NEVER render stale detections if drift exceeds 30 frames (~1.0s)
-            if (Math.abs(closest - currentVidFrame) <= 30) {
-              currentFrameDets = rtFrameBufferRef.current.get(closest);
-            }
-          }
-        }
       }
       if (!currentFrameDets && frameMapRef.current.size > 0) {
         currentFrameDets = getInterpolatedDets(currentVidTime * videoFps, frameMapRef.current, activeModule === 'examination' ? 15 : 5);
@@ -1982,6 +2000,20 @@ export const WorkbenchView: React.FC = () => {
       setPipelineStage('JOB_CREATED');
       setJobStatusText(`Job #${jobId} [${chosenModule.toUpperCase()}] running — connecting real-time stream...`);
 
+      // Ensure video is paused at start of inference so visual frames match incoming results
+      if (videoRef.current) {
+        videoRef.current.pause();
+        videoRef.current.currentTime = 0;
+      }
+      setPlaying(false);
+
+      if (chosenModule === 'traffic' && !assignedCalib && jobData.calibration_id) {
+        fetch(apiUrl(`/api/v1/calibrations/${jobData.calibration_id}`))
+          .then(r => r.ok ? r.json() : null)
+          .then(c => { if (c) setRealCalib(c); })
+          .catch(() => {});
+      }
+
       connectWebSocket(jobId);
     } catch (err: any) {
       console.error('Job error:', err);
@@ -2272,23 +2304,23 @@ export const WorkbenchView: React.FC = () => {
       setIsClassifying(false);
 
       // Intelligent Domain Routing:
-      // 1. If Scene Router or filename detects traffic environment -> route to traffic
-      // 2. If Scene Router or filename detects classroom examination -> route to examination
-      // 3. Otherwise respect the current selected domain
-      let chosenModule: AnalysisModule = 'traffic';
-      const sceneRecommendsTraffic = rec?.recommended_module === 'traffic' || (rec?.scene_type === 'TRAFFIC' && (rec?.confidence || 0) >= 0.40);
-      const sceneRecommendsExam = rec?.recommended_module === 'examination' || (rec?.scene_type === 'CLASSROOM_EXAMINATION' && (rec?.confidence || 0) >= 0.40);
+      // 1. If filename or scene classifier explicitly recommends traffic, route to traffic
+      // 2. If filename or scene classifier explicitly recommends examination, route to examination
+      // 3. Otherwise respect current active module (activeModuleRef.current)
+      let chosenModule: AnalysisModule = activeModuleRef.current || 'traffic';
+      const sceneRecommendsTraffic = rec?.recommended_module === 'traffic' || (rec?.scene_type === 'TRAFFIC' && (rec?.confidence || 0) >= 0.35);
+      const sceneRecommendsExam = rec?.recommended_module === 'examination' || (rec?.scene_type === 'CLASSROOM_EXAMINATION' && (rec?.confidence || 0) >= 0.50);
 
-      if (sceneRecommendsTraffic && !sceneRecommendsExam) {
-        chosenModule = 'traffic';
-      } else if (sceneRecommendsExam && !sceneRecommendsTraffic) {
-        chosenModule = 'examination';
-      } else if (isTrafficByName && !isExamByName) {
+      if (isTrafficByName && !isExamByName) {
         chosenModule = 'traffic';
       } else if (isExamByName && !isTrafficByName) {
         chosenModule = 'examination';
-      } else if (activeModuleRef.current === 'examination' || activeDomain === 'examination') {
+      } else if (sceneRecommendsTraffic && !sceneRecommendsExam) {
+        chosenModule = 'traffic';
+      } else if (sceneRecommendsExam && !sceneRecommendsTraffic) {
         chosenModule = 'examination';
+      } else if (activeModuleRef.current) {
+        chosenModule = activeModuleRef.current;
       } else {
         chosenModule = 'traffic';
       }
@@ -3103,13 +3135,14 @@ export const WorkbenchView: React.FC = () => {
           <video
             ref={videoRef}
             src={videoSrc || undefined}
-            autoPlay
             playsInline
             muted
             loop
             preload="auto"
             onCanPlay={() => {
-              videoRef.current?.play().catch(() => {});
+              if (!isLiveStreamingRef.current && frameMapRef.current.size > 0) {
+                videoRef.current?.play().catch(() => {});
+              }
             }}
             onPlay={() => setPlaying(true)}
             onPause={() => { if (!isLiveStreamingRef.current) setPlaying(false); }}
@@ -3134,7 +3167,9 @@ export const WorkbenchView: React.FC = () => {
                   video_duration_sec: prev?.video_duration_sec || videoRef.current!.duration
                 }));
               }
-              videoRef.current?.play().catch(() => {});
+              if (!isLiveStreamingRef.current && frameMapRef.current.size > 0) {
+                videoRef.current?.play().catch(() => {});
+              }
             }}
             onSeeked={() => {
               setRenderTick(t => t + 1);

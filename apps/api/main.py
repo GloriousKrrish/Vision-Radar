@@ -226,6 +226,28 @@ async def upload_video(project_id: int, file: UploadFile = File(...), db: Sessio
     db.add(video)
     db.commit()
     db.refresh(video)
+
+    # Auto-seed default perspective road calibration so metric speed estimation works immediately
+    try:
+        from visionradar.cv.calibration import HomographyCalibrator
+        img_pts = [(330.0, 160.0), (470.0, 160.0), (748.0, 435.0), (51.0, 435.0)]
+        world_pts = [(-1.0, 150.0), (13.0, 150.0), (13.0, 0.5), (-1.0, 0.5)]
+        auto_calibrator = HomographyCalibrator(image_points=img_pts, world_points=world_pts)
+        auto_calib = Calibration(
+            video_id=video.id,
+            version=1,
+            h_matrix_json=auto_calibrator.H.tolist(),
+            image_points_json=img_pts,
+            world_points_json=world_pts,
+            reprojection_rmse_m=auto_calibrator.compute_reprojection_rmse(),
+            camera_height_m=9.0,
+            pitch_deg=14.0
+        )
+        db.add(auto_calib)
+        db.commit()
+    except Exception as e_calib:
+        print(f"[upload_video] Auto-calibration seed warning: {e_calib}")
+
     return video
 
 @app.get("/api/v1/videos/{video_id}", response_model=VideoResponse)
@@ -356,7 +378,32 @@ def create_calibration(video_id: int, payload: CalibrationCreate, db: Session = 
 
 @app.get("/api/v1/videos/{video_id}/calibrations", response_model=List[CalibrationResponse])
 def list_calibrations(video_id: int, db: Session = Depends(get_db)):
-    return db.query(Calibration).filter(Calibration.video_id == video_id).order_by(Calibration.version.desc()).all()
+    calibs = db.query(Calibration).filter(Calibration.video_id == video_id).order_by(Calibration.version.desc()).all()
+    if not calibs:
+        video = db.query(Video).filter(Video.id == video_id).first()
+        if video:
+            try:
+                from visionradar.cv.calibration import HomographyCalibrator
+                img_pts = [(330.0, 160.0), (470.0, 160.0), (748.0, 435.0), (51.0, 435.0)]
+                world_pts = [(-1.0, 150.0), (13.0, 150.0), (13.0, 0.5), (-1.0, 0.5)]
+                auto_calibrator = HomographyCalibrator(image_points=img_pts, world_points=world_pts)
+                auto_calib = Calibration(
+                    video_id=video_id,
+                    version=1,
+                    h_matrix_json=auto_calibrator.H.tolist(),
+                    image_points_json=img_pts,
+                    world_points_json=world_pts,
+                    reprojection_rmse_m=auto_calibrator.compute_reprojection_rmse(),
+                    camera_height_m=9.0,
+                    pitch_deg=14.0
+                )
+                db.add(auto_calib)
+                db.commit()
+                db.refresh(auto_calib)
+                calibs = [auto_calib]
+            except Exception as e_calib:
+                print(f"[list_calibrations] Auto-calibration seed warning: {e_calib}")
+    return calibs
 
 @app.get("/api/v1/calibrations/{calibration_id}", response_model=CalibrationResponse)
 def get_calibration(calibration_id: int, db: Session = Depends(get_db)):
@@ -431,7 +478,29 @@ async def start_processing_job(video_id: int, payload: JobCreate, background_tas
             if v_calib:
                 calib_id = v_calib.id
             else:
-                calib_id = None
+                # Auto-seed standard road calibration for traffic video so metric speed estimation works immediately
+                try:
+                    from visionradar.cv.calibration import HomographyCalibrator
+                    img_pts = [(330.0, 160.0), (470.0, 160.0), (748.0, 435.0), (51.0, 435.0)]
+                    world_pts = [(-1.0, 150.0), (13.0, 150.0), (13.0, 0.5), (-1.0, 0.5)]
+                    auto_calibrator = HomographyCalibrator(image_points=img_pts, world_points=world_pts)
+                    auto_calib = Calibration(
+                        video_id=video_id,
+                        version=1,
+                        h_matrix_json=auto_calibrator.H.tolist(),
+                        image_points_json=img_pts,
+                        world_points_json=world_pts,
+                        reprojection_rmse_m=auto_calibrator.compute_reprojection_rmse(),
+                        camera_height_m=9.0,
+                        pitch_deg=14.0
+                    )
+                    db.add(auto_calib)
+                    db.commit()
+                    db.refresh(auto_calib)
+                    calib_id = auto_calib.id
+                except Exception as e_calib:
+                    print(f"[start_processing_job] Auto-calibration seed warning: {e_calib}")
+                    calib_id = None
 
     cfg = dict(payload.config_json or {})
     cfg["domain"] = domain
