@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: visionradar-backend
+    name: vision-radar
     runtime: python
     region: oregon
     plan: free

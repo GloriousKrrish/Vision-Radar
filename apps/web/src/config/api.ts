@@ -26,7 +26,7 @@ function resolveBaseUrl(): string {
 
     // 3. Automatic Vercel production deployment fallback to Render backend
     if (window.location.hostname.endsWith('vercel.app')) {
-      return 'https://visionradar-backend.onrender.com';
+      return 'https://vision-radar.onrender.com';
     }
   }
 
