@@ -517,10 +517,14 @@ class MonocularSpeedEstimator:
     def estimate_speed_at_frame(
         self,
         trajectory: VehicleTrajectory,
-        target_frame_idx: int
+        target_frame_idx: int,
+        source_width: Optional[float] = None,
+        source_height: Optional[float] = None
     ) -> SpeedEstimate:
-        """Backwards compatible entrypoint."""
-        return self.evaluate_multi_estimator_speed(trajectory, target_frame_idx)
+        """Backwards compatible entrypoint supporting optional native frame scaling."""
+        return self.evaluate_multi_estimator_speed(
+            trajectory, target_frame_idx, source_width=source_width, source_height=source_height
+        )
 
     def estimate_path_average_speed(self, trajectory: VehicleTrajectory) -> Optional[SpeedEstimate]:
         """Backwards compatible path average speed estimator."""

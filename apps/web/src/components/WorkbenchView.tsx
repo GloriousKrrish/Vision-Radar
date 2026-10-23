@@ -1009,8 +1009,7 @@ export const WorkbenchView: React.FC = () => {
         }
 
         // Smooth, non-blocking visual synchronization during live AI inference:
-        // Keep video playing continuously without demuxer-stalling seeks.
-        // Gently adjust playback rate (+/- 15%) to maintain lockstep with live frames.
+        // Dynamically match video playback rate to incoming throughput_fps to eliminate drift and demuxer-stalling seeks.
         if (videoRef.current && videoRef.current.readyState >= 2) {
           const vFps = telemetry?.video_fps || 29.97;
           const targetSec = frameIdx / vFps;
@@ -1021,15 +1020,18 @@ export const WorkbenchView: React.FC = () => {
             videoRef.current.play().catch(() => {});
           }
 
-          if (Math.abs(drift) > 1.2) {
+          const liveFps = payload?.throughput_fps || processingFps || vFps;
+          const baseRate = Math.min(1.0, Math.max(0.25, liveFps / vFps));
+
+          if (Math.abs(drift) > 1.8) {
             videoRef.current.currentTime = targetSec;
-            videoRef.current.playbackRate = 1.0;
-          } else if (drift > 0.15) {
-            videoRef.current.playbackRate = 1.15;
-          } else if (drift < -0.15) {
-            videoRef.current.playbackRate = 0.85;
+            videoRef.current.playbackRate = baseRate;
+          } else if (drift > 0.10) {
+            videoRef.current.playbackRate = Math.min(1.4, baseRate * 1.25);
+          } else if (drift < -0.10) {
+            videoRef.current.playbackRate = Math.max(0.15, baseRate * 0.75);
           } else {
-            videoRef.current.playbackRate = 1.0;
+            videoRef.current.playbackRate = baseRate;
           }
         }
 
@@ -1409,7 +1411,10 @@ export const WorkbenchView: React.FC = () => {
         // Traffic Calibration Overlay
         if (realCalib?.image_points_json && realCalib.image_points_json.length >= 4) {
           const calibPts = realCalib.image_points_json;
-          const displayPts = calibPts.map(([x, y]: [number, number]) => [x * scaleX, y * scaleY]);
+          const maxX = Math.max(...calibPts.map((p: any) => p[0]));
+          const displayPts = maxX <= 850
+            ? calibPts.map(([x, y]: [number, number]) => [x, y])
+            : calibPts.map(([x, y]: [number, number]) => [x * scaleX, y * scaleY]);
 
           cx.strokeStyle = '#3B82F6'; cx.fillStyle = '#3B82F61A'; cx.lineWidth = 1.5;
           cx.beginPath();
@@ -1493,17 +1498,17 @@ export const WorkbenchView: React.FC = () => {
 
       let currentFrameDets: any[] | undefined;
       if (isLiveStreamingRef.current) {
-        // In live streaming mode, prioritize exact match with latest streamed frame or video frame
+        // In live streaming mode, prioritize exact match with video frame or latest streamed frame
         const targetF = latestInferenceFrame ?? currentVidFrame;
-        currentFrameDets = rtFrameBufferRef.current.get(targetF)
-          || rtFrameBufferRef.current.get(currentVidFrame)
-          || findDets(targetF, rtFrameBufferRef.current, 6)
-          || findDets(currentVidFrame, rtFrameBufferRef.current, 6);
+        currentFrameDets = rtFrameBufferRef.current.get(currentVidFrame)
+          || rtFrameBufferRef.current.get(targetF)
+          || findDets(currentVidFrame, rtFrameBufferRef.current, 12)
+          || findDets(targetF, rtFrameBufferRef.current, 12);
       } else if (frameMapRef.current.size === 0) {
-        currentFrameDets = findDets(currentVidFrame, rtFrameBufferRef.current, activeModule === 'examination' ? 15 : 5);
+        currentFrameDets = findDets(currentVidFrame, rtFrameBufferRef.current, activeModule === 'examination' ? 15 : 10);
       }
       if (!currentFrameDets && frameMapRef.current.size > 0) {
-        currentFrameDets = getInterpolatedDets(currentVidTime * videoFps, frameMapRef.current, activeModule === 'examination' ? 15 : 5);
+        currentFrameDets = getInterpolatedDets(currentVidTime * videoFps, frameMapRef.current, activeModule === 'examination' ? 15 : 8);
       }
 
       if (currentFrameDets && currentFrameDets.length > 0) {

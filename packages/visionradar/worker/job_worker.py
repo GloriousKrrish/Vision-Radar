@@ -499,15 +499,17 @@ def run_job_streaming(job_id: int, loop: asyncio.AbstractEventLoop):
                 # Suppress unconfirmed 1-hit tracks after initial frames to eliminate transient false detections / flicker
                 if trk.hits < 2 and trk.detection_count < 2 and frame_idx > 2:
                     continue
-                # Suppress lost or drifting out-of-bounds tracks to eliminate ghost corner brackets
-                if trk.time_since_update > traffic_stride:
+                # Allow Kalman filter to smoothly interpolate up to 4 frames of missed detections / stride gaps without flickering
+                if trk.time_since_update > 4:
                     continue
                 if hasattr(trk, 'is_out_of_bounds') and trk.is_out_of_bounds(src_w, src_h, horizon_ratio=0.10):
                     continue
 
                 active_tracks[trk.track_id] = trk
                 speed_estimator.project_trajectory(trk.trajectory, source_width=src_w, source_height=src_h)
-                est = speed_estimator.estimate_speed_at_frame(trk.trajectory, target_frame_idx=frame_idx)
+                est = speed_estimator.estimate_speed_at_frame(
+                    trk.trajectory, target_frame_idx=frame_idx, source_width=src_w, source_height=src_h
+                )
                 cached_speed_estimates[trk.track_id][frame_idx] = est
                 last_successful_stage = "SPEED"
                 last_stage_ts = time.time()
@@ -994,7 +996,9 @@ def run_job_streaming(job_id: int, loop: asyncio.AbstractEventLoop):
             for p in trk.trajectory.points:
                 est = trk_cached.get(p.frame_index)
                 if est is None:
-                    est = speed_estimator.estimate_speed_at_frame(trk.trajectory, target_frame_idx=p.frame_index)
+                    est = speed_estimator.estimate_speed_at_frame(
+                        trk.trajectory, target_frame_idx=p.frame_index, source_width=src_w, source_height=src_h
+                    )
 
                 if est and est.validity in ("VALID", "LOW_CONFIDENCE") and est.smoothed_kmh is not None and est.smoothed_kmh > 0:
                     measurements_to_insert.append({

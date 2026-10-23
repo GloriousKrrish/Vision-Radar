@@ -291,9 +291,9 @@ class ByteTrackTracker(BaseTracker):
     """
     def __init__(
         self,
-        max_age: int = 10,
-        iou_threshold: float = 0.3,
-        high_threshold: float = 0.40,
+        max_age: int = 25,
+        iou_threshold: float = 0.25,
+        high_threshold: float = 0.30,
         low_threshold: float = 0.10
     ):
         self.max_age = max_age
@@ -399,24 +399,35 @@ class ByteTrackTracker(BaseTracker):
                 trk.update(det, frame_index, timestamp)
                 matched_tids.add(tid)
 
-        # Step 5: Initiate new tracks ONLY from unmatched High-confidence detections
+        # Step 5: Initiate new tracks OR Re-Identify and recover recently lost tracks
         for j, det in enumerate(dets_high):
             if j not in matched_high_dets:
-                # Check for ID Switch against recently lost tracks
+                recovered_tid = None
+                recovered_trk = None
                 for lost_tid, lost_meta in list(self.recently_lost_tracks.items()):
                     ref_frame = lost_meta.get("lost_at_frame", lost_meta["last_frame"])
                     if frame_index - ref_frame <= self.max_age * 2:
                         iou_lost = compute_iou(lost_meta["last_bbox"], det.bbox)
-                        if iou_lost >= 0.35:
-                            self.total_id_switches += 1
+                        if iou_lost >= 0.25:
+                            recovered_tid = lost_tid
+                            recovered_trk = lost_meta.get("track_obj")
                             del self.recently_lost_tracks[lost_tid]
                             break
 
-                new_track = TrackedVehicle(self.next_id, det, frame_index, timestamp)
-                self.active_tracks[self.next_id] = new_track
-                self.next_id += 1
+                if recovered_tid is not None and recovered_trk is not None:
+                    if recovered_trk.time_since_update > 1:
+                        self.total_fragmentations += 1
+                    if recovered_trk.vehicle_class != det.class_name:
+                        self.total_class_switches += 1
+                    recovered_trk.update(det, frame_index, timestamp)
+                    self.active_tracks[recovered_tid] = recovered_trk
+                    matched_high_dets.add(j)
+                else:
+                    new_track = TrackedVehicle(self.next_id, det, frame_index, timestamp)
+                    self.active_tracks[self.next_id] = new_track
+                    self.next_id += 1
 
-        # Step 6: Duplicate track suppression (merge overlapping tracks of same class)
+        # Step 6: Duplicate track suppression (merge overlapping tracks of same class or spurious newborn duplicates)
         active_list = list(self.active_tracks.values())
         duplicate_tids = set()
         for i in range(len(active_list)):
@@ -425,10 +436,8 @@ class ByteTrackTracker(BaseTracker):
                 t2 = active_list[k]
                 if t1.track_id in duplicate_tids or t2.track_id in duplicate_tids:
                     continue
-                if t1.vehicle_class != t2.vehicle_class:
-                    continue
-                if compute_iou(t1.bbox, t2.bbox) > 0.85:
-                    # Keep track with more hits / earlier origin
+                iou_val = compute_iou(t1.bbox, t2.bbox)
+                if (t1.vehicle_class == t2.vehicle_class and iou_val > 0.80) or (iou_val > 0.70 and min(t1.hits, t2.hits) <= 1):
                     if t1.hits >= t2.hits:
                         duplicate_tids.add(t2.track_id)
                     else:
@@ -449,7 +458,8 @@ class ByteTrackTracker(BaseTracker):
                 "last_bbox": stale_trk.bbox,
                 "last_frame": stale_trk.last_frame,
                 "lost_at_frame": frame_index,
-                "vehicle_class": stale_trk.vehicle_class
+                "vehicle_class": stale_trk.vehicle_class,
+                "track_obj": stale_trk
             }
             del self.active_tracks[tid]
 
@@ -483,7 +493,8 @@ class ByteTrackTracker(BaseTracker):
                     "last_bbox": trk.bbox,
                     "last_frame": trk.last_frame,
                     "lost_at_frame": frame_index,
-                    "vehicle_class": trk.vehicle_class
+                    "vehicle_class": trk.vehicle_class,
+                    "track_obj": trk
                 }
                 del self.active_tracks[tid]
         return list(self.active_tracks.values())

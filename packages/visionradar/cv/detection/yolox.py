@@ -79,19 +79,26 @@ class YOLOXDetector(BaseDetector):
                 # 1. Try High-Performance ONNX Runtime CPU Engine First
                 if _ORT_AVAILABLE and device.upper() != "GPU":
                     try:
-                        model_proto = onnx.load(target_path)
-                        model_proto.graph.input[0].type.tensor_type.shape.dim[2].dim_value = self.input_size[1]
-                        model_proto.graph.input[0].type.tensor_type.shape.dim[3].dim_value = self.input_size[0]
-                        model_proto.graph.output[0].type.tensor_type.shape.dim[1].dim_value = len(self.grids)
                         sess_opts = ort.SessionOptions()
                         sess_opts.intra_op_num_threads = min(4, os.cpu_count() or 4)
                         sess_opts.log_severity_level = 3  # suppress harmless shape warnings
                         sess_opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
                         available_p = ort.get_available_providers()
                         active_providers = ['OpenVINOExecutionProvider', 'CPUExecutionProvider'] if 'OpenVINOExecutionProvider' in available_p else ['CPUExecutionProvider']
-                        self.ort_session = ort.InferenceSession(
-                            model_proto.SerializeToString(), sess_opts, providers=active_providers
-                        )
+
+                        if self.input_size == (416, 416):
+                            # Native input shape: load model file directly without graph mutation overhead for ~25ms inference
+                            self.ort_session = ort.InferenceSession(
+                                target_path, sess_opts, providers=active_providers
+                            )
+                        else:
+                            model_proto = onnx.load(target_path)
+                            model_proto.graph.input[0].type.tensor_type.shape.dim[2].dim_value = self.input_size[1]
+                            model_proto.graph.input[0].type.tensor_type.shape.dim[3].dim_value = self.input_size[0]
+                            model_proto.graph.output[0].type.tensor_type.shape.dim[1].dim_value = len(self.grids)
+                            self.ort_session = ort.InferenceSession(
+                                model_proto.SerializeToString(), sess_opts, providers=active_providers
+                            )
                         self.ort_input_name = self.ort_session.get_inputs()[0].name
                         self.valid_onnx_detector = True
                         self.fallback_used = False
@@ -271,6 +278,29 @@ class YOLOXDetector(BaseDetector):
                         confidence=confidences[idx],
                         bbox=(float(max(0.0, bx)), float(max(0.0, by)), float(min(float(w), bx + bw_i)), float(min(float(h), by + bh_i)))
                     ))
+
+            # Inter-class vehicle deduplication (suppress dual Car/Truck detections on identical vehicle)
+            if len(detections) > 1:
+                deduped = []
+                for i, d1 in enumerate(detections):
+                    dominated = False
+                    for j, d2 in enumerate(detections):
+                        if i != j and d2.confidence > d1.confidence:
+                            # Compute IoU between bounding boxes
+                            xA = max(d1.bbox[0], d2.bbox[0])
+                            yA = max(d1.bbox[1], d2.bbox[1])
+                            xB = min(d1.bbox[2], d2.bbox[2])
+                            yB = min(d1.bbox[3], d2.bbox[3])
+                            inter = max(0.0, xB - xA) * max(0.0, yB - yA)
+                            a1 = max(1e-5, (d1.bbox[2] - d1.bbox[0]) * (d1.bbox[3] - d1.bbox[1]))
+                            a2 = max(1e-5, (d2.bbox[2] - d2.bbox[0]) * (d2.bbox[3] - d2.bbox[1]))
+                            iou = inter / float(a1 + a2 - inter)
+                            if iou > 0.65:
+                                dominated = True
+                                break
+                    if not dominated:
+                        deduped.append(d1)
+                detections = deduped
 
             t1 = time.perf_counter()
             elapsed_ms = (t1 - t0) * 1000.0

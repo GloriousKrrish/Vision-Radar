@@ -33,7 +33,7 @@ def get_detector(name: str = "yolox", **kwargs) -> BaseDetector:
     if key in ("yolox-nano-baseline", "yolox-baseline"):
         kwargs.setdefault("input_size", (640, 640))
         kwargs.setdefault("class_specific_nms", False)
-    elif key in ("yolox-nano-optimized", "yolox-fast", "yolox-nano-416"):
+    elif key in ("yolox-nano-optimized", "yolox-fast", "yolox-nano-416", "yolox", "yolox-nano", "yolo"):
         kwargs.setdefault("input_size", (416, 416))
         kwargs.setdefault("class_specific_nms", True)
     elif key in ("yolox-highres", "yolox-640"):
